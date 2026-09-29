@@ -207,13 +207,19 @@
     </details>
     <details id="masterDetails">
       <summary>Employee / shift master columns <span id="masterSummary" class="pill"></span></summary>
-      <p class="hint">Required: the Employee ID column that matches the punch log's Employee ID, and ShiftCode. EmpName, Department and Designation are optional but make the tables more readable.</p>
+      <p class="hint">Required: the Employee ID column that matches the punch log's Employee ID, and ShiftCode. EmpName, Department and Designation are optional but make the tables more readable. If the same employee is assigned different shifts on different days, also map <strong>Date</strong> (one row per employee per exact calendar day) or <strong>Weekday</strong> (one row per employee per weekday, repeating every week) — whichever your roster export uses. Leave both unmapped for a simple fixed shift-per-employee file.</p>
       <div class="mapping-grid" id="masterMappingGrid"></div>
+      <p class="hint" id="rosterModeNote" style="margin:10px 0 0"></p>
     </details>
     <details id="shiftDetails" open>
       <summary>Shift bucket mapping <span id="shiftSummary" class="pill"></span></summary>
       <p class="hint">A = 05:30–07:30 · General = 07:31–12:00 · B = 12:01–16:00 · C = 20:00–23:00. Tell Shift Drift which bucket each raw ShiftCode from the master file is assigned to.</p>
       <div class="mapping-grid" id="shiftMappingGrid"></div>
+    </details>
+    <details id="diagnosticsDetails">
+      <summary>Data issues <span id="diagnosticsSummary" class="pill"></span></summary>
+      <p class="hint">Specific values that failed to parse or match, so you can compare them against your CSV directly instead of guessing.</p>
+      <div id="diagnosticsBody"></div>
     </details>
   </section>
 
@@ -284,8 +290,8 @@
   "use strict";
 
   var BUCKETS = ["A","General","B","C"];
-  var BUCKET_ORDER = { A:0, General:1, B:2, C:3 };
   var BUCKET_WINDOW = { A:"05:30–07:30", General:"07:31–12:00", B:"12:01–16:00", C:"20:00–23:00" };
+  var BUCKET_RANGE = { A:[330,450], General:[451,720], B:[721,960], C:[1200,1380] };
   var WEEKDAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
   var PUNCH_FIELDS = ["EmployeeID","Timestamp","Direction"];
@@ -293,9 +299,12 @@
   var PUNCH_TIME_CANDIDATES = ["logdate","datetime","punchtime","timestamp","logdatetime"];
   var PUNCH_DIR_CANDIDATES = ["direction","attdirection","inout","punchtype"];
 
-  var MASTER_FIELDS = ["EmpID","EmpName","Department","Designation","ShiftCode"];
+  var MASTER_FIELDS = ["EmpID","EmpName","Department","Designation","ShiftCode","Date","Weekday"];
   var MASTER_REQUIRED = ["EmpID","ShiftCode"];
   var MASTER_ID_CANDIDATES = ["empid","empcode","employeeid","userid","devicelogid","id","code","empno","employeecode"];
+  var MASTER_DATE_CANDIDATES = ["date","shiftdate","rosterdate","effectivedate","workdate","scheduledate"];
+  var MASTER_WEEKDAY_CANDIDATES = ["weekday","dayofweek","dow","day"];
+  var WEEKDAY_ALIASES = { sun:0, sunday:0, mon:1, monday:1, tue:2, tues:2, tuesday:2, wed:3, weds:3, wednesday:3, thu:4, thur:4, thurs:4, thursday:4, fri:5, friday:5, sat:6, saturday:6 };
 
   function esc(s){
     return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
@@ -363,6 +372,39 @@
     }
     var d4 = new Date(s.replace(" ", "T"));
     return isNaN(d4) ? null : d4;
+  }
+
+  // Master-file roster dates carry no time component.
+  function parseDateOnly(raw){
+    if (raw == null) return null;
+    var s = String(raw).trim();
+    if (!s) return null;
+    var m;
+    if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) {
+      var d = new Date(+m[1], +m[2]-1, +m[3]);
+      return isNaN(d) ? null : d;
+    }
+    if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/))) {
+      var a = +m[1], b = +m[2], y = +m[3]; if (y < 100) y += 2000;
+      var day, mon;
+      if (a > 12) { day = a; mon = b; } else if (b > 12) { day = b; mon = a; } else { day = a; mon = b; }
+      var d2 = new Date(y, mon-1, day);
+      return isNaN(d2) ? null : d2;
+    }
+    if (/^\d{5}(\.\d+)?$/.test(s)) {
+      var d3 = excelSerialToDate(+s);
+      return isNaN(d3) ? null : d3;
+    }
+    var d4 = new Date(s);
+    return isNaN(d4) ? null : d4;
+  }
+
+  function parseWeekday(raw){
+    var s = String(raw||"").trim().toLowerCase();
+    if (!s) return null;
+    if (s in WEEKDAY_ALIASES) return WEEKDAY_ALIASES[s];
+    if (/^[0-6]$/.test(s)) return +s;
+    return null;
   }
 
   function bucketFromMinutes(min){
@@ -464,9 +506,9 @@
 
   // ---------------- state ----------------
   var state = {
-    punch: { rawRows: [], headers: [], columnMap: {} },
+    punch: { rawRows: [], headers: [], columnMap: {}, isSample: false },
     directionMap: {},
-    master: { rawRows: [], headers: [], columnMap: {} },
+    master: { rawRows: [], headers: [], columnMap: {}, isSample: false },
     shiftMap: {},
     rows: []
   };
@@ -505,14 +547,23 @@
   function renderMasterColumnMapping(){
     var matched = renderMappingGrid("masterMappingGrid", MASTER_FIELDS, MASTER_REQUIRED, state.master.headers, state.master.columnMap, runPipeline);
     var summary = document.getElementById("masterSummary");
+    var note = document.getElementById("rosterModeNote");
     if (!state.master.rawRows.length) {
       summary.textContent = "no file loaded";
       summary.className = "pill pill-warn";
+      note.textContent = "";
       return;
     }
     var ok = MASTER_REQUIRED.every(function(f){ return state.master.columnMap[f]; });
     summary.textContent = matched + "/" + MASTER_FIELDS.length + " matched";
     summary.className = "pill " + (ok ? "pill-good" : "pill-warn");
+    if (state.master.columnMap.Date) {
+      note.textContent = "Roster mode: exact date — each employee's assigned shift is looked up by their specific date, falling back to their most recent row if that date isn't in the file.";
+    } else if (state.master.columnMap.Weekday) {
+      note.textContent = "Roster mode: weekly pattern — each employee's assigned shift is looked up by weekday, repeating every week.";
+    } else {
+      note.textContent = "Roster mode: fixed — one ShiftCode per employee, same every day.";
+    }
   }
 
   function renderDirectionMapping(distinctDirs){
@@ -572,14 +623,19 @@
   function aggregateEarliestIn(){
     var cm = state.punch.columnMap;
     var byKey = {};
-    var stats = { parseFail:0, noId:0 };
+    var stats = { parseFail:0, noId:0, parseFailSamples:[] };
     state.punch.rawRows.forEach(function(r){
       var empId = (r[cm.EmployeeID]||"").toString().trim();
       if (!empId) { stats.noId++; return; }
       var rawDir = (r[cm.Direction]||"").toString().trim();
       if (state.directionMap[rawDir] !== "IN") return;
-      var dt = parseDateTime(r[cm.Timestamp]);
-      if (!dt) { stats.parseFail++; return; }
+      var rawTs = r[cm.Timestamp];
+      var dt = parseDateTime(rawTs);
+      if (!dt) {
+        stats.parseFail++;
+        if (stats.parseFailSamples.length < 20) stats.parseFailSamples.push({ empId: empId, raw: rawTs });
+        return;
+      }
       var dateStr = fmtDate(dt);
       var minutes = dt.getHours()*60 + dt.getMinutes();
       var key = empId + "|" + dateStr;
@@ -591,33 +647,67 @@
     return { list: list, stats: stats };
   }
 
+  // Supports three roster shapes, auto-detected from which optional columns
+  // are mapped: an exact-date roster (Date mapped), a repeating weekly
+  // pattern (Weekday mapped, no Date), or a single fixed shift per employee
+  // (neither mapped — every row's ShiftCode is just the static assignment).
+  // Date/Weekday rows also feed a per-employee fallback, so an employee with
+  // only one row still resolves fine even in date/weekday mode.
   function buildMasterLookup(){
     var cm = state.master.columnMap;
-    var map = {};
-    if (!cm.EmpID) return map;
+    var infoById = {}, byDate = {}, byWeekday = {}, flatShift = {};
+    var mode = cm.Date ? "date" : (cm.Weekday ? "weekday" : "flat");
+    if (!cm.EmpID) return { infoById:infoById, byDate:byDate, byWeekday:byWeekday, flatShift:flatShift, mode:mode };
     state.master.rawRows.forEach(function(r){
       var id = (r[cm.EmpID]||"").toString().trim();
       if (!id) return;
-      map[id] = {
+      infoById[id] = {
         empName: cm.EmpName ? (r[cm.EmpName]||"").toString().trim() : "",
         dept: cm.Department ? (r[cm.Department]||"").toString().trim() : "",
-        desig: cm.Designation ? (r[cm.Designation]||"").toString().trim() : "",
-        shiftRaw: cm.ShiftCode ? (r[cm.ShiftCode]||"").toString().trim() : ""
+        desig: cm.Designation ? (r[cm.Designation]||"").toString().trim() : ""
       };
+      var shiftRaw = cm.ShiftCode ? (r[cm.ShiftCode]||"").toString().trim() : "";
+      if (cm.Date) {
+        var d = parseDateOnly(r[cm.Date]);
+        if (d) byDate[id + "|" + fmtDate(d)] = shiftRaw;
+      }
+      if (cm.Weekday) {
+        var wd = parseWeekday(r[cm.Weekday]);
+        if (wd != null) byWeekday[id + "|" + wd] = shiftRaw;
+      }
+      flatShift[id] = shiftRaw;
     });
-    return map;
+    return { infoById:infoById, byDate:byDate, byWeekday:byWeekday, flatShift:flatShift, mode:mode };
+  }
+
+  function resolveAssignedShift(lookup, empId, dateStr, weekday){
+    if (lookup.mode === "date") {
+      var k1 = empId + "|" + dateStr;
+      return (k1 in lookup.byDate) ? lookup.byDate[k1] : (lookup.flatShift[empId] || "");
+    }
+    if (lookup.mode === "weekday") {
+      var k2 = empId + "|" + weekday;
+      return (k2 in lookup.byWeekday) ? lookup.byWeekday[k2] : (lookup.flatShift[empId] || "");
+    }
+    return lookup.flatShift[empId] || "";
   }
 
   function classify(rows){
     rows.forEach(function(row){
+      // "derived" is the named bucket (A/General/B/C/Unclassified) shown in the
+      // "Landed in" column — purely informational, it does not drive the flag.
       row.derived = bucketFromMinutes(row.firstInMin);
       if (!row.shiftRaw) { row.assigned = ""; row.flag = "No shift assigned"; return; }
       var assigned = state.shiftMap[row.shiftRaw] || "";
       row.assigned = assigned;
       if (!assigned) { row.flag = "Unmapped shift code"; return; }
-      if (row.derived === "Unclassified") { row.flag = "Unclassified"; return; }
-      var d = BUCKET_ORDER[row.derived], a = BUCKET_ORDER[assigned];
-      row.flag = d < a ? "Early" : (d > a ? "Late" : "On-time");
+      // Compare directly against the assigned shift's own start/end, not
+      // bucket-vs-bucket — so a clock-in before or after ALL four named
+      // windows still resolves to Early/Late instead of "Unclassified".
+      var range = BUCKET_RANGE[assigned];
+      if (row.firstInMin < range[0]) row.flag = "Early";
+      else if (row.firstInMin > range[1]) row.flag = "Late";
+      else row.flag = "On-time";
     });
   }
 
@@ -859,6 +949,7 @@
       document.getElementById("outlierBody").innerHTML = "";
       document.getElementById("directionMappingGrid").innerHTML = "";
       document.getElementById("shiftMappingGrid").innerHTML = "";
+      document.getElementById("diagnosticsBody").innerHTML = "";
       return;
     }
 
@@ -874,19 +965,23 @@
     var agg = aggregateEarliestIn();
     var masterLookup = buildMasterLookup();
 
-    var unmatched = 0;
+    var unmatched = 0, unmatchedSamples = [];
     var rows = agg.list.map(function(a){
-      var m = masterLookup[a.empId];
-      if (!m && state.master.rawRows.length) unmatched++;
+      var m = masterLookup.infoById[a.empId];
+      if (!m && state.master.rawRows.length) {
+        unmatched++;
+        if (unmatchedSamples.indexOf(a.empId) === -1 && unmatchedSamples.length < 20) unmatchedSamples.push(a.empId);
+      }
+      var weekday = a.dateObj.getDay();
       return {
         empcode: a.empId,
         empname: (m && m.empName) ? m.empName : a.empId,
         dept: (m && m.dept) ? m.dept : "Unspecified",
         desig: m ? m.desig : "",
-        shiftRaw: m ? m.shiftRaw : "",
+        shiftRaw: resolveAssignedShift(masterLookup, a.empId, a.dateStr, weekday),
         dateObj: a.dateObj,
         dateStr: a.dateStr,
-        weekday: a.dateObj.getDay(),
+        weekday: weekday,
         firstInMin: a.minutes
       };
     });
@@ -912,9 +1007,33 @@
     else if (unmatched) notes.push(unmatched + " employee-day(s) had no matching row in the master file");
     if (agg.stats.parseFail) notes.push(agg.stats.parseFail + " punch row(s) had an unparseable timestamp and were skipped");
     document.getElementById("footNote").textContent = notes.join(" · ");
+
+    renderDiagnostics(agg.stats, unmatchedSamples, unmatched);
   }
 
-  function loadPunch(rows, label){
+  function renderDiagnostics(aggStats, unmatchedSamples, unmatchedCount){
+    var body = document.getElementById("diagnosticsBody");
+    var parts = [];
+    if (aggStats.parseFailSamples.length) {
+      parts.push('<p class="hint" style="margin:0 0 6px"><strong>Unparseable timestamps</strong> — ' + aggStats.parseFail + ' row(s) total, showing up to 20 distinct examples:</p>');
+      parts.push('<div class="table-scroll"><table><thead><tr><th>Employee ID</th><th>Raw value that failed to parse</th></tr></thead><tbody>' +
+        aggStats.parseFailSamples.map(function(s){
+          return '<tr><td class="mono">'+esc(s.empId)+'</td><td class="mono">"'+esc(s.raw)+'"</td></tr>';
+        }).join("") + '</tbody></table></div>');
+    }
+    if (unmatchedSamples.length) {
+      parts.push('<p class="hint" style="margin:14px 0 6px"><strong>Employee IDs with no master-file match</strong> — ' + unmatchedCount + ' employee-day(s) total, showing up to 20 distinct IDs:</p>');
+      parts.push('<div class="mono" style="font-size:12px; line-height:1.8">' + unmatchedSamples.map(esc).join(", ") + '</div>');
+    }
+    body.innerHTML = parts.length ? parts.join("") : '<p class="hint" style="margin:0">No parsing or matching issues found.</p>';
+    var summary = document.getElementById("diagnosticsSummary");
+    var total = aggStats.parseFail + unmatchedCount;
+    summary.textContent = total ? total + " issue(s)" : "clean";
+    summary.className = "pill " + (total ? "pill-warn" : "pill-good");
+    document.getElementById("diagnosticsDetails").open = total > 0;
+  }
+
+  function loadPunch(rows, label, isSample){
     state.punch.rawRows = rows;
     state.punch.headers = rows.length ? Object.keys(rows[0]) : [];
     state.punch.columnMap = {
@@ -923,11 +1042,12 @@
       Direction: guessColumn(state.punch.headers, PUNCH_DIR_CANDIDATES)
     };
     state.directionMap = {};
+    state.punch.isSample = !!isSample;
     document.getElementById("punchStatus").textContent = label;
     runPipeline();
   }
 
-  function loadMaster(rows, label){
+  function loadMaster(rows, label, isSample){
     state.master.rawRows = rows;
     state.master.headers = rows.length ? Object.keys(rows[0]) : [];
     var idCol = guessColumn(state.master.headers, MASTER_ID_CANDIDATES);
@@ -936,11 +1056,31 @@
       EmpName: guessColumn(state.master.headers, ["empname","name","employeename"]),
       Department: guessColumn(state.master.headers, ["department","dept"]),
       Designation: guessColumn(state.master.headers, ["designation","title","role"]),
-      ShiftCode: guessColumn(state.master.headers, ["shiftcode","shift"])
+      ShiftCode: guessColumn(state.master.headers, ["shiftcode","shift"]),
+      Date: guessColumn(state.master.headers, MASTER_DATE_CANDIDATES),
+      Weekday: guessColumn(state.master.headers, MASTER_WEEKDAY_CANDIDATES)
     };
     state.shiftMap = {};
+    state.master.isSample = !!isSample;
     document.getElementById("masterStatus").textContent = label;
     runPipeline();
+  }
+
+  // A real upload always replaces sample data on its own side. But if the
+  // OTHER side is still holding leftover sample data, silently joining real
+  // data against fake reference data (or vice versa) produces misleading
+  // results — so clear it and make that visible instead of silent.
+  function clearStaleMasterSample(){
+    if (!state.master.isSample) return;
+    state.master.rawRows = []; state.master.headers = []; state.master.columnMap = {};
+    state.shiftMap = {}; state.master.isSample = false;
+    document.getElementById("masterStatus").textContent = "Example master data cleared (you uploaded real punch data) — upload your employee/shift master CSV to compare against assigned shifts.";
+  }
+  function clearStalePunchSample(){
+    if (!state.punch.isSample) return;
+    state.punch.rawRows = []; state.punch.headers = []; state.punch.columnMap = {};
+    state.directionMap = {}; state.punch.isSample = false;
+    document.getElementById("punchStatus").textContent = "Example punch log cleared (you uploaded a real master file) — upload your punch log CSV.";
   }
 
   document.getElementById("sampleBtn").addEventListener("click", function(){
@@ -949,12 +1089,14 @@
     state.punch.headers = Object.keys(sample.punches[0]);
     state.punch.columnMap = { EmployeeID:"DeviceLogId", Timestamp:"LogDate", Direction:"Direction" };
     state.directionMap = {};
+    state.punch.isSample = true;
     document.getElementById("punchStatus").textContent = "Showing example punch log — upload your CSV to replace it.";
 
     state.master.rawRows = sample.master;
     state.master.headers = Object.keys(sample.master[0]);
     state.master.columnMap = { EmpID:"Empcode", EmpName:"EmpName", Department:"Department", Designation:"Designation", ShiftCode:"ShiftCode" };
     state.shiftMap = {};
+    state.master.isSample = true;
     document.getElementById("masterStatus").textContent = "Showing example employee/shift master — upload your CSV to replace it.";
 
     runPipeline();
@@ -965,7 +1107,10 @@
     if (!file) return;
     Papa.parse(file, {
       header: true, skipEmptyLines: true,
-      complete: function(res){ loadPunch(res.data, "Loaded " + res.data.length + " punch rows from " + file.name); },
+      complete: function(res){
+        clearStaleMasterSample();
+        loadPunch(res.data, "Loaded " + res.data.length + " punch rows from " + file.name, false);
+      },
       error: function(err){ document.getElementById("punchStatus").textContent = "Could not parse file: " + err.message; }
     });
   });
@@ -975,7 +1120,10 @@
     if (!file) return;
     Papa.parse(file, {
       header: true, skipEmptyLines: true,
-      complete: function(res){ loadMaster(res.data, "Loaded " + res.data.length + " employee rows from " + file.name); },
+      complete: function(res){
+        clearStalePunchSample();
+        loadMaster(res.data, "Loaded " + res.data.length + " employee rows from " + file.name, false);
+      },
       error: function(err){ document.getElementById("masterStatus").textContent = "Could not parse file: " + err.message; }
     });
   });
