@@ -29,6 +29,14 @@ use the upload controls to swap in real punch-log and master CSVs.
 All CSV parsing and analysis happens client-side, in-browser. Uploaded data is
 never sent anywhere.
 
+
+123456	15-05-2026 04:06	227	1234	15-05-2026 04:06	in 		in			0	1				0
+123456	15-05-2026 12:08	227	1234	15-05-2026 12:07	out 		out			0	1			0	0
+123456	18-05-2026 13:01	227	1234	18-05-2026 13:01	in		in			0	1			0	0
+123456	18-05-2026 22:06	227	1234	18-05-2026 22:06	out		out			0	1			0	0
+
+
+
 ## Data sensitivity note
 
 This repo contains only the tool. No real attendance or employee data is checked
