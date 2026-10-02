@@ -126,8 +126,10 @@
   .map-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--bg-surface-2); border-radius: 8px; border: 1px solid var(--border); }
   .map-row .label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .map-row .sub { font-size: 11px; color: var(--text-muted); font-weight: 500; }
-  select, input[type=search] { font: inherit; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--text-primary); }
+  select, input[type=search], input[type=date] { font: inherit; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--text-primary); }
   select { max-width: 148px; }
+  .filter-row label.date-label { font-size: 12.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .filter-row button:disabled { opacity: .45; cursor: default; }
 
   /* ---------- stat row ---------- */
   .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -181,7 +183,7 @@
         <p class="tagline">Takes raw device punch logs, keeps each day's earliest IN, and flags clock-ins outside the assigned shift bucket — plus the Friday-early → Monday-late weekend-extension pattern.</p>
       </div>
     </div>
-    <div class="source-controls">
+    <div class="source-controls" id="sourceControls">
       <label class="file-btn" for="punchInput">Upload punch log CSV</label>
       <input type="file" id="punchInput" accept=".csv,text/csv" hidden />
       <label class="file-btn secondary" for="masterInput">Upload employee/shift master CSV</label>
@@ -189,12 +191,16 @@
       <button id="sampleBtn" class="ghost-btn" type="button">Load sample data</button>
     </div>
   </header>
-  <div class="source-status-row">
+  <div class="source-status-row" id="sourceStatusRow">
     <div class="source-status" id="punchStatus">Showing example punch log — upload your CSV to replace it.</div>
     <div class="source-status" id="masterStatus">Showing example employee/shift master — upload your CSV to replace it.</div>
   </div>
+  <div class="source-status-row" id="liveBanner" style="display:none">
+    <div class="source-status" id="liveStatus"></div>
+    <button id="liveRefreshBtn" class="ghost-btn" type="button">Refresh</button>
+  </div>
 
-  <section class="panel setup-panel">
+  <section class="panel setup-panel" id="setupPanel">
     <details id="punchDetails">
       <summary>Punch log columns <span id="punchSummary" class="pill"></span></summary>
       <p class="hint">Required: an Employee ID column, a punch timestamp (Date + Time together), and a Direction column telling IN from OUT. Matched automatically by header name — override any of them here.</p>
@@ -234,7 +240,7 @@
     <div class="table-scroll">
       <table>
         <thead><tr>
-          <th>Employee</th><th>Department</th><th>Shift</th>
+          <th>Employee</th><th>Department</th><th>Branch</th><th>Designation</th><th>Shift</th>
           <th>Friday</th><th>Fri earliest IN</th><th>Monday</th><th>Mon earliest IN</th><th>Weekends flagged</th>
         </tr></thead>
         <tbody id="comboBody"></tbody>
@@ -261,6 +267,11 @@
       <span class="pill" id="outlierCount">0 rows</span>
     </div>
     <p class="hint">Every day where the earliest-IN bucket doesn't match the employee's assigned ShiftCode — not just Fridays and Mondays.</p>
+    <div class="filter-row" id="liveDateRow" style="display:none">
+      <label class="date-label">From <input type="date" id="startDate" /></label>
+      <label class="date-label">To <input type="date" id="endDate" /></label>
+      <select id="locationFilter"></select>
+    </div>
     <div class="filter-row">
       <input type="search" id="searchBox" placeholder="Search employee ID or name" />
       <select id="deptFilter"></select>
@@ -274,11 +285,16 @@
     <div class="table-scroll">
       <table>
         <thead><tr>
-          <th>Employee</th><th>Department</th><th>Date</th><th>Day</th>
+          <th>Employee</th><th>Department</th><th>Branch</th><th>Designation</th><th>Date</th><th>Day</th>
           <th>Assigned</th><th>Earliest IN</th><th>Landed in</th><th>Flag</th>
         </tr></thead>
         <tbody id="outlierBody"></tbody>
       </table>
+    </div>
+    <div class="filter-row" id="pager" style="display:none">
+      <button id="pagerPrev" class="ghost-btn" type="button">◀ Prev</button>
+      <span class="date-label" id="pagerLabel"></span>
+      <button id="pagerNext" class="ghost-btn" type="button">Next ▶</button>
     </div>
   </section>
 
@@ -505,6 +521,13 @@
   }
 
   // ---------------- state ----------------
+  // true once /api/meta confirms a live companion server (server/app.py) is
+  // reachable — switches data loading/rendering from the manual-CSV/sample
+  // path to fetch()-backed queries against its SQLite store. false (the
+  // default) leaves every offline behavior exactly as it was.
+  var isLiveMode = false;
+  var liveState = { page: 1, pageSize: 200 };
+
   var state = {
     punch: { rawRows: [], headers: [], columnMap: {}, isSample: false },
     directionMap: {},
@@ -734,22 +757,41 @@
   }
 
   // ---------------- render: stats ----------------
+  function renderStatTiles(counts){
+    var tiles = [
+      { n: counts.employees, l: "Employees", cls: "" },
+      { n: counts.employeeDays, l: "Employee-days (earliest IN)", cls: "" },
+      { n: counts.early, l: "Early clock-ins", cls: "early" },
+      { n: counts.late, l: "Late clock-ins", cls: "late" },
+      { n: counts.comboFlags, l: "Weekend-extension flags", cls: "accent" },
+      { n: counts.comboEmployees, l: "Employees flagged", cls: "accent" }
+    ];
+    document.getElementById("statRow").innerHTML = tiles.map(function(t){
+      return '<div class="stat-tile '+t.cls+'"><div class="num tabular">'+t.n+'</div><div class="lbl">'+esc(t.l)+'</div></div>';
+    }).join("");
+  }
+
+  // Offline mode: everything is already in memory, so counts are derived by
+  // filtering the full row/combo arrays directly.
   function renderStats(rows, combos){
     var employees = new Set(rows.map(function(r){ return r.empcode; }));
     var early = rows.filter(function(r){ return r.flag === "Early"; }).length;
     var late = rows.filter(function(r){ return r.flag === "Late"; }).length;
     var comboEmployees = new Set(combos.map(function(c){ return c.fri.empcode; })).size;
-    var tiles = [
-      { n: employees.size, l: "Employees", cls: "" },
-      { n: rows.length, l: "Employee-days (earliest IN)", cls: "" },
-      { n: early, l: "Early clock-ins", cls: "early" },
-      { n: late, l: "Late clock-ins", cls: "late" },
-      { n: combos.length, l: "Weekend-extension flags", cls: "accent" },
-      { n: comboEmployees, l: "Employees flagged", cls: "accent" }
-    ];
-    document.getElementById("statRow").innerHTML = tiles.map(function(t){
-      return '<div class="stat-tile '+t.cls+'"><div class="num tabular">'+t.n+'</div><div class="lbl">'+esc(t.l)+'</div></div>';
-    }).join("");
+    renderStatTiles({
+      employees: employees.size, employeeDays: rows.length, early: early, late: late,
+      comboFlags: combos.length, comboEmployees: comboEmployees
+    });
+  }
+
+  // Live mode: the browser never holds the full dataset (just one page of
+  // it), so these come pre-aggregated from /api/stats instead.
+  function renderStatsFromApi(stats){
+    renderStatTiles({
+      employees: stats.employees, employeeDays: stats.employee_days,
+      early: stats.early, late: stats.late,
+      comboFlags: stats.combo_flags, comboEmployees: stats.combo_employees
+    });
   }
 
   // ---------------- render: combo table ----------------
@@ -757,13 +799,15 @@
     var body = document.getElementById("comboBody");
     document.getElementById("comboCount").textContent = combos.length + " flag" + (combos.length===1?"":"s");
     if (!combos.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="8">No employee is both early on a Friday and late the following Monday in this data.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="10">No employee is both early on a Friday and late the following Monday in this data.</td></tr>';
       return;
     }
     body.innerHTML = combos.map(function(c){
       return "<tr>" +
         "<td><strong>"+esc(c.fri.empname)+"</strong><br><span class='mono' style='color:var(--text-muted)'>"+esc(c.fri.empcode)+"</span></td>" +
         "<td>"+esc(c.fri.dept)+"</td>" +
+        "<td>"+esc(c.fri.location_id||"—")+"</td>" +
+        "<td>"+esc(c.fri.desig||"—")+"</td>" +
         "<td>"+esc(c.fri.shiftRaw)+" <span style='color:var(--text-muted)'>→ "+c.fri.assigned+"</span></td>" +
         "<td class='mono'>"+c.fri.dateStr+"</td>" +
         "<td class='mono tabular'><span class='badge badge-early'>early</span> "+minutesToClock(c.fri.firstInMin)+"</td>" +
@@ -775,7 +819,7 @@
   }
 
   // ---------------- render: outlier table ----------------
-  var filterState = { search:"", dept:"all", flag:"all", weekday:"all" };
+  var filterState = { search:"", dept:"all", flag:"all", weekday:"all", location:"all" };
 
   function populateFilterOptions(rows){
     var depts = Array.from(new Set(rows.map(function(r){ return r.dept; }))).filter(Boolean).sort();
@@ -787,31 +831,46 @@
     wdSel.value = filterState.weekday;
   }
 
-  function renderOutlierTable(rows){
-    var outliers = rows.filter(function(r){ return r.flag === "Early" || r.flag === "Late"; });
-    var filtered = outliers.filter(function(r){
-      if (filterState.dept !== "all" && r.dept !== filterState.dept) return false;
-      if (filterState.flag !== "all" && r.flag !== filterState.flag) return false;
-      if (filterState.weekday !== "all" && String(r.weekday) !== filterState.weekday) return false;
-      if (filterState.search) {
-        var q = filterState.search.toLowerCase();
-        if (r.empcode.toLowerCase().indexOf(q) === -1 && r.empname.toLowerCase().indexOf(q) === -1) return false;
-      }
-      return true;
-    }).sort(function(a,b){ return b.dateObj - a.dateObj; });
+  // In live mode, the API has already filtered (dept/flag/weekday/search/
+  // location/date-range) and paginated the rows handed to this function, so
+  // it skips re-filtering/slicing and just renders what it was given,
+  // showing `liveTotal` (the server's total match count) instead of
+  // re-deriving a count from the (partial) page in hand.
+  function renderOutlierTable(rows, liveTotal){
+    var MAX_ROWS = 500;
+    var filtered, countLabel;
+    if (isLiveMode) {
+      filtered = rows;
+      countLabel = liveTotal + " row" + (liveTotal===1?"":"s") + " matching filters";
+    } else {
+      var outliers = rows.filter(function(r){ return r.flag === "Early" || r.flag === "Late"; });
+      filtered = outliers.filter(function(r){
+        if (filterState.dept !== "all" && r.dept !== filterState.dept) return false;
+        if (filterState.flag !== "all" && r.flag !== filterState.flag) return false;
+        if (filterState.weekday !== "all" && String(r.weekday) !== filterState.weekday) return false;
+        if (filterState.search) {
+          var q = filterState.search.toLowerCase();
+          if (r.empcode.toLowerCase().indexOf(q) === -1 && r.empname.toLowerCase().indexOf(q) === -1) return false;
+        }
+        return true;
+      }).sort(function(a,b){ return b.dateObj - a.dateObj; });
+      countLabel = filtered.length + " row" + (filtered.length===1?"":"s") + " of " + outliers.length;
+    }
 
-    document.getElementById("outlierCount").textContent = filtered.length + " row" + (filtered.length===1?"":"s") + " of " + outliers.length;
+    document.getElementById("outlierCount").textContent = countLabel;
     var body = document.getElementById("outlierBody");
     if (!filtered.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="8">No outliers match this filter.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="10">No outliers match this filter.</td></tr>';
       return;
     }
-    var MAX_ROWS = 500;
-    body.innerHTML = filtered.slice(0, MAX_ROWS).map(function(r){
+    var rowsToRender = isLiveMode ? filtered : filtered.slice(0, MAX_ROWS);
+    body.innerHTML = rowsToRender.map(function(r){
       var badge = r.flag === "Early" ? "badge-early" : "badge-late";
       return "<tr>" +
         "<td><strong>"+esc(r.empname)+"</strong><br><span class='mono' style='color:var(--text-muted)'>"+esc(r.empcode)+"</span></td>" +
         "<td>"+esc(r.dept)+"</td>" +
+        "<td>"+esc(r.location_id||"—")+"</td>" +
+        "<td>"+esc(r.desig||"—")+"</td>" +
         "<td class='mono'>"+r.dateStr+"</td>" +
         "<td>"+WEEKDAY_NAMES[r.weekday]+"</td>" +
         "<td>"+esc(r.shiftRaw)+" <span style='color:var(--text-muted)'>("+r.assigned+")</span></td>" +
@@ -819,7 +878,7 @@
         "<td>"+r.derived+"</td>" +
         "<td><span class='badge "+badge+"'>"+r.flag+"</span></td>" +
       "</tr>";
-    }).join("") + (filtered.length > MAX_ROWS ? "<tr class='empty-row'><td colspan='8'>Showing first "+MAX_ROWS+" of "+filtered.length+" rows — narrow with a filter to see more.</td></tr>" : "");
+    }).join("") + (!isLiveMode && filtered.length > MAX_ROWS ? "<tr class='empty-row'><td colspan='10'>Showing first "+MAX_ROWS+" of "+filtered.length+" rows — narrow with a filter to see more.</td></tr>" : "");
   }
 
   // ---------------- charts ----------------
@@ -832,9 +891,8 @@
     return '<span class="legend-item"><span class="swatch" style="background:'+color+'"></span>'+esc(label)+'</span>';
   }
 
+  // Offline mode: counts derived by filtering the full in-memory row array.
   function renderWeekdayChart(rows){
-    var svg = document.getElementById("weekdayChart");
-    svg.innerHTML = "";
     var order = [1,2,3,4,5];
     var counts = order.map(function(wd){
       var subset = rows.filter(function(r){ return r.weekday === wd; });
@@ -846,6 +904,25 @@
         other: subset.filter(function(r){ return r.flag==="Unclassified"||r.flag==="Unmapped shift code"||r.flag==="No shift assigned"; }).length
       };
     });
+    renderWeekdayChartFromCounts(counts);
+  }
+
+  // Live mode: counts come pre-aggregated from /api/stats's by_weekday, since
+  // the browser never holds the full filtered dataset to recompute this from.
+  function renderWeekdayChartFromApi(byWeekday){
+    var order = [1,2,3,4,5];
+    var byWd = {};
+    byWeekday.forEach(function(w){ byWd[w.weekday] = w; });
+    var counts = order.map(function(wd){
+      var w = byWd[wd] || { total:0, early:0, ontime:0, late:0 };
+      return { wd: wd, early: w.early||0, ontime: w.ontime||0, late: w.late||0, other: Math.max(0, (w.total||0) - (w.early||0) - (w.ontime||0) - (w.late||0)) };
+    });
+    renderWeekdayChartFromCounts(counts);
+  }
+
+  function renderWeekdayChartFromCounts(counts){
+    var svg = document.getElementById("weekdayChart");
+    svg.innerHTML = "";
     var W = 520, H = 260, padL = 30, padB = 26, padT = 10, padR = 10;
     var plotW = W - padL - padR, plotH = H - padT - padB;
     var maxTotal = Math.max(1, Math.max.apply(null, counts.map(function(c){ return c.early+c.ontime+c.late+c.other; })));
@@ -889,14 +966,25 @@
       legendItem("var(--late)","Late") + legendItem("var(--other)","Unclassified / unmapped");
   }
 
+  // Offline mode: counts derived by filtering the full in-memory row array.
   function renderDeptChart(rows){
-    var svg = document.getElementById("deptChart");
-    svg.innerHTML = "";
     var depts = Array.from(new Set(rows.map(function(r){ return r.dept; }))).filter(Boolean).sort();
     var counts = depts.map(function(dep){
       var subset = rows.filter(function(r){ return r.dept === dep; });
       return { dept:dep, early: subset.filter(function(r){ return r.flag==="Early"; }).length, late: subset.filter(function(r){ return r.flag==="Late"; }).length };
     });
+    renderDeptChartFromCounts(counts);
+  }
+
+  // Live mode: counts come pre-aggregated from /api/stats's by_department.
+  function renderDeptChartFromApi(byDepartment){
+    var counts = byDepartment.map(function(d){ return { dept: d.department || "Unspecified", early: d.early||0, late: d.late||0 }; });
+    renderDeptChartFromCounts(counts);
+  }
+
+  function renderDeptChartFromCounts(counts){
+    var svg = document.getElementById("deptChart");
+    svg.innerHTML = "";
     var W = 400, H = 260, padL = 26, padB = 40, padT = 14, padR = 10;
     var plotW = W - padL - padR, plotH = H - padT - padB;
     var maxV = Math.max(1, Math.max.apply(null, counts.map(function(c){ return Math.max(c.early,c.late); })));
@@ -945,7 +1033,7 @@
     var punchOk = PUNCH_FIELDS.every(function(f){ return state.punch.columnMap[f]; });
     if (!punchOk) {
       document.getElementById("statRow").innerHTML = "";
-      document.getElementById("comboBody").innerHTML = '<tr class="empty-row"><td colspan="8">Map the required punch log columns above to run the analysis.</td></tr>';
+      document.getElementById("comboBody").innerHTML = '<tr class="empty-row"><td colspan="10">Map the required punch log columns above to run the analysis.</td></tr>';
       document.getElementById("outlierBody").innerHTML = "";
       document.getElementById("directionMappingGrid").innerHTML = "";
       document.getElementById("shiftMappingGrid").innerHTML = "";
@@ -1083,6 +1171,153 @@
     document.getElementById("punchStatus").textContent = "Example punch log cleared (you uploaded a real master file) — upload your punch log CSV.";
   }
 
+  // ---------------- live mode (server/app.py-backed data path) ----------------
+  // Rows/combos here already arrive classified and date/filter-scoped from
+  // the API (see shift_rules.py / db.py), so these just reshape field names
+  // to match the offline row shape above, letting renderOutlierTable /
+  // renderComboTable serve both modes unchanged.
+  function normalizeLiveRow(r){
+    return {
+      empcode: r.emp_id,
+      empname: r.emp_name || r.emp_id,
+      dept: r.department || "Unspecified",
+      desig: r.designation || "",
+      location_id: r.location_id || "",
+      shiftRaw: r.shift_code,
+      assigned: r.assigned_bucket,
+      dateObj: new Date(r.date + "T00:00:00"),
+      dateStr: r.date,
+      weekday: r.weekday,
+      firstInMin: r.first_in_min,
+      derived: r.derived_bucket,
+      flag: r.flag
+    };
+  }
+
+  function normalizeLiveCombo(c){
+    return { fri: normalizeLiveRow(c.friday), mon: normalizeLiveRow(c.monday), count: c.weekend_count };
+  }
+
+  function debounce(fn, ms){
+    var t;
+    return function(){
+      var args = arguments, ctx = this;
+      clearTimeout(t);
+      t = setTimeout(function(){ fn.apply(ctx, args); }, ms);
+    };
+  }
+
+  function liveQueryParams(extra){
+    var p = new URLSearchParams();
+    p.set("start", document.getElementById("startDate").value);
+    p.set("end", document.getElementById("endDate").value);
+    if (filterState.location !== "all") p.set("location", filterState.location);
+    if (filterState.dept !== "all") p.set("department", filterState.dept);
+    if (filterState.flag !== "all") p.set("flag", filterState.flag);
+    if (filterState.weekday !== "all") p.set("weekday", filterState.weekday);
+    if (filterState.search) p.set("search", filterState.search);
+    if (extra) Object.keys(extra).forEach(function(k){ p.set(k, extra[k]); });
+    return p;
+  }
+
+  function renderPager(total, page, pageSize){
+    var pager = document.getElementById("pager");
+    if (total <= pageSize) { pager.style.display = "none"; return; }
+    var totalPages = Math.max(1, Math.ceil(total / pageSize));
+    pager.style.display = "";
+    document.getElementById("pagerLabel").textContent = "Page " + page + " of " + totalPages + " (" + total + " rows)";
+    document.getElementById("pagerPrev").disabled = page <= 1;
+    document.getElementById("pagerNext").disabled = page >= totalPages;
+  }
+
+  function runLiveQuery(){
+    fetch("/api/outliers?" + liveQueryParams({ page: liveState.page, page_size: liveState.pageSize }).toString())
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        var rows = data.rows.map(normalizeLiveRow);
+        renderOutlierTable(rows, data.total);
+        renderPager(data.total, data.page, data.page_size);
+      })
+      .catch(function(err){
+        document.getElementById("outlierBody").innerHTML = '<tr class="empty-row"><td colspan="10">Could not load live data: '+esc(err.message)+'</td></tr>';
+      });
+
+    var comboParams = liveQueryParams();
+    ["flag","search","weekday","page","page_size"].forEach(function(k){ comboParams.delete(k); });
+    fetch("/api/combos?" + comboParams.toString())
+      .then(function(res){ return res.json(); })
+      .then(function(data){ renderComboTable(data.combos.map(normalizeLiveCombo)); });
+
+    var statsParams = liveQueryParams();
+    ["flag","search","weekday","page","page_size"].forEach(function(k){ statsParams.delete(k); });
+    fetch("/api/stats?" + statsParams.toString())
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        renderStatsFromApi(data);
+        renderWeekdayChartFromApi(data.by_weekday);
+        renderDeptChartFromApi(data.by_department);
+      });
+  }
+
+  function liveFilterChanged(){
+    liveState.page = 1;
+    runLiveQuery();
+  }
+
+  function populateLiveFilterOptions(filters){
+    var deptSel = document.getElementById("deptFilter");
+    deptSel.innerHTML = '<option value="all">All departments</option>' + filters.departments.map(function(d){ return '<option value="'+esc(d)+'">'+esc(d)+'</option>'; }).join("");
+    deptSel.value = filterState.dept;
+    var locSel = document.getElementById("locationFilter");
+    locSel.innerHTML = '<option value="all">All branches</option>' + filters.locations.map(function(l){ return '<option value="'+esc(l)+'">'+esc(l)+'</option>'; }).join("");
+    locSel.value = filterState.location;
+    var wdSel = document.getElementById("weekdayFilter");
+    wdSel.innerHTML = '<option value="all">All weekdays</option>' + [1,2,3,4,5,0,6].map(function(w){ return '<option value="'+w+'">'+WEEKDAY_NAMES[w]+'</option>'; }).join("");
+    wdSel.value = filterState.weekday;
+  }
+
+  function enterLiveMode(meta){
+    isLiveMode = true;
+    document.getElementById("sourceControls").style.display = "none";
+    document.getElementById("sourceStatusRow").style.display = "none";
+    document.getElementById("setupPanel").style.display = "none";
+    document.getElementById("liveBanner").style.display = "";
+    document.getElementById("liveDateRow").style.display = "";
+
+    var endDate = meta.last_import_date ? new Date(meta.last_import_date+"T00:00:00") : new Date();
+    var startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - 29);
+    document.getElementById("startDate").value = fmtDate(startDate);
+    document.getElementById("endDate").value = fmtDate(endDate);
+
+    document.getElementById("liveStatus").textContent = "Live data — last imported " + (meta.last_import_date || "never") +
+      " · " + (meta.total_rows||0).toLocaleString() + " employee-days on record (" + (meta.earliest_date||"—") + " to " + (meta.last_import_date||"—") + ")";
+
+    fetch("/api/filters").then(function(r){ return r.json(); }).then(function(filters){
+      populateLiveFilterOptions(filters);
+      runLiveQuery();
+    });
+  }
+
+  // Tries the live companion server first; falls back to the fully offline
+  // manual-upload/sample-data experience if it isn't running (e.g. index.html
+  // opened directly as a file:// page, with no `python3 server/app.py`).
+  function boot(){
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 1500);
+    fetch("/api/meta", ctrl ? { signal: ctrl.signal } : {})
+      .then(function(res){
+        clearTimeout(timer);
+        if (!res.ok) throw new Error("no live server");
+        return res.json();
+      })
+      .then(function(meta){ enterLiveMode(meta); })
+      .catch(function(){
+        clearTimeout(timer);
+        document.getElementById("sampleBtn").click();
+      });
+  }
+
   document.getElementById("sampleBtn").addEventListener("click", function(){
     var sample = buildSampleData();
     state.punch.rawRows = sample.punches;
@@ -1128,12 +1363,31 @@
     });
   });
 
-  document.getElementById("searchBox").addEventListener("input", function(e){ filterState.search = e.target.value; renderOutlierTable(state.rows); });
-  document.getElementById("deptFilter").addEventListener("change", function(e){ filterState.dept = e.target.value; renderOutlierTable(state.rows); });
-  document.getElementById("flagFilter").addEventListener("change", function(e){ filterState.flag = e.target.value; renderOutlierTable(state.rows); });
-  document.getElementById("weekdayFilter").addEventListener("change", function(e){ filterState.weekday = e.target.value; renderOutlierTable(state.rows); });
+  document.getElementById("searchBox").addEventListener("input", debounce(function(e){
+    filterState.search = e.target.value;
+    if (isLiveMode) liveFilterChanged(); else renderOutlierTable(state.rows);
+  }, 300));
+  document.getElementById("deptFilter").addEventListener("change", function(e){
+    filterState.dept = e.target.value;
+    if (isLiveMode) liveFilterChanged(); else renderOutlierTable(state.rows);
+  });
+  document.getElementById("flagFilter").addEventListener("change", function(e){
+    filterState.flag = e.target.value;
+    if (isLiveMode) liveFilterChanged(); else renderOutlierTable(state.rows);
+  });
+  document.getElementById("weekdayFilter").addEventListener("change", function(e){
+    filterState.weekday = e.target.value;
+    if (isLiveMode) liveFilterChanged(); else renderOutlierTable(state.rows);
+  });
+  document.getElementById("locationFilter").addEventListener("change", function(e){ filterState.location = e.target.value; liveFilterChanged(); });
+  document.getElementById("startDate").addEventListener("change", liveFilterChanged);
+  document.getElementById("endDate").addEventListener("change", liveFilterChanged);
+  document.getElementById("pagerPrev").addEventListener("click", function(){ if (liveState.page > 1) { liveState.page--; runLiveQuery(); } });
+  document.getElementById("pagerNext").addEventListener("click", function(){ liveState.page++; runLiveQuery(); });
+  document.getElementById("liveRefreshBtn").addEventListener("click", runLiveQuery);
 
-  // boot with sample data
-  document.getElementById("sampleBtn").click();
+  // Tries the live companion server first (see boot()); falls back to
+  // sample data if index.html is just opened as a file:// page.
+  boot();
 })();
 </script>
