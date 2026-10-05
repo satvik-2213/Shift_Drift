@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* Laurus brand + chart tokens. Light theme only (by design - no dark-mode
+   fallback). Brand colors sampled directly from the real logo PNG
+   (client/src/assets/laurus-logo.png), not invented - purple is the
+   wordmark's ink color, green/teal are the ring-icon accents.
+   Chart status colors (early/ontime/late/unclassified) are a SEPARATE,
+   independently-validated set (node scripts/validate_palette.js) - they
+   encode data state, not brand, so they're not tied to the brand hues. */
+:root {
+  color-scheme: light;
+
+  --brand-1: #42145f; /* deep purple - wordmark ink */
+  --brand-2: #00b2a9; /* teal - ring icon */
+  --brand-3: #69be28; /* green - ring icon */
+
+  --bg-page: #faf8fb;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f3eef7;
+  --bg-surface-3: #e7f7f5;
+
+  --text-primary: #1a1223;
+  --text-secondary: #5c5468;
+  --text-muted: #938c9e;
+
+  --border: rgba(66, 20, 95, 0.1);
+  --border-strong: rgba(66, 20, 95, 0.18);
+  --gridline: #ebe4f0;
+  --baseline: #cdc2d6;
+
+  --accent: #42145f;
+  --accent-ink: #ffffff;
+  --accent-2: #00b2a9;
+
+  /* Clock-in outcome colors (validated: node scripts/validate_palette.js) */
+  --early: #2a78d6;
+  --ontime: #008300;
+  --late: #e34948;
+  --unclassified: #4a3aa7;
+
+  --shadow: 0 1px 2px rgba(66, 20, 95, 0.05), 0 8px 24px -10px rgba(66, 20, 95, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  margin: 0;
+  min-height: 100vh;
+  /* Soft, subtle wash instead of flat white - very low-opacity brand hues,
+     fixed so it reads as the page's own depth, not a decoration that scrolls. */
+  background-color: var(--bg-page);
+  background-image: radial-gradient(1100px 520px at -5% -10%, rgba(66, 20, 95, 0.055), transparent 60%),
+    radial-gradient(900px 480px at 105% 0%, rgba(0, 178, 169, 0.06), transparent 55%),
+    radial-gradient(800px 420px at 50% 110%, rgba(105, 190, 40, 0.045), transparent 55%);
+  background-attachment: fixed;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

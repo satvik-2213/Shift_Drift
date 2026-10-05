@@ -122,7 +122,7 @@ def query_outliers_all(conn, start, end, location=None, department=None, flag=No
     return [dict(r) for r in rows]
 
 
-def query_combos(conn, start, end, location=None, department=None):
+def query_combos(conn, start, end, location=None, department=None, search=None):
     """Friday-early -> Monday-late weekend-extension pattern, scoped to
     Fridays within [start, end] (the paired Monday is looked up individually
     by its own date, which may fall a day or two past `end`)."""
@@ -134,6 +134,10 @@ def query_combos(conn, start, end, location=None, department=None):
     if department:
         where.append("department = ?")
         params.append(department)
+    if search:
+        where.append("(emp_id LIKE ? OR emp_name LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
 
     fridays = conn.execute(
         f"""SELECT {','.join(COLUMNS)} FROM attendance_days

@@ -3,3 +3,6 @@ server/output/
 __pycache__/
 *.pyc
 .DS_Store
+tools/
+client/node_modules/
+client/dist/

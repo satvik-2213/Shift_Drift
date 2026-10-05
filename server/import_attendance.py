@@ -46,9 +46,13 @@ def get_connection():
     database = os.environ.get("DB_NAME", "laurus")
     user = os.environ["DB_USER"]
     password = os.environ["DB_PASSWORD"]
+    kwargs = {}
+    if os.environ.get("DB_TDS_VERSION"):
+        kwargs["tds_version"] = os.environ["DB_TDS_VERSION"]
     return pymssql.connect(
         server=server, port=port, database=database,
         user=user, password=password, as_dict=True,
+        **kwargs,
     )
 
 
@@ -68,6 +72,19 @@ def hhmm_to_hour_minute(value):
 
 
 def fetch_rows(conn, target_date):
+    """EMPMAST keeps one row per employee per department/location transfer
+    (not one row per employee), and tabDesignation is keyed per
+    (desgcode, location_id), not just desgcode - a plain LEFT JOIN on either
+    fans one DAYFILE row out into several duplicates. The OUTER APPLYs below
+    pick exactly one row from each:
+      - EMPMAST: prefer CONSIDER='1' (the "active assignment" flag), tie-broken
+        by highest trid - an arbitrary but deterministic choice for the
+        employees who have more than one CONSIDER='1' row (see
+        find_ambiguous_empmast_emp_codes), pending HR confirming the real rule.
+      - tabDesignation: prefer the row whose location_id matches the chosen
+        EMPMAST row's location (case/whitespace-insensitive), falling back to
+        any row for that desgcode if no location match exists.
+    """
     shift_list = ",".join(f"'{code}'" for code in KNOWN_SHIFT_CODES)
     query = f"""
         SELECT
@@ -80,8 +97,21 @@ def fetch_rows(conn, target_date):
             e.location_ID AS LocationID,
             td.desgdesc  AS Designation
         FROM DAYFILE d
-        LEFT JOIN EMPMAST e ON e.EMP_CODE = d.EMP_CODE
-        LEFT JOIN tabDesignation td ON td.desgcode = TRY_CAST(e.DESIGN AS INT)
+        OUTER APPLY (
+            SELECT TOP 1 em.*
+            FROM EMPMAST em
+            WHERE em.EMP_CODE = d.EMP_CODE
+            ORDER BY CASE WHEN em.CONSIDER = '1' THEN 0 ELSE 1 END, em.trid DESC
+        ) e
+        OUTER APPLY (
+            SELECT TOP 1 td2.desgdesc
+            FROM tabDesignation td2
+            WHERE td2.desgcode = TRY_CAST(e.DESIGN AS INT)
+            ORDER BY CASE
+                WHEN UPPER(LTRIM(RTRIM(td2.location_id))) = UPPER(LTRIM(RTRIM(e.location_ID))) THEN 0
+                ELSE 1
+            END
+        ) td
         WHERE d.PDATE = %(target_date)s
           AND d.STATUS = 'XX'
           AND d.SHIFTCODE IN ({shift_list})
@@ -90,6 +120,23 @@ def fetch_rows(conn, target_date):
     cursor = conn.cursor()
     cursor.execute(query, {"target_date": target_date})
     return cursor.fetchall()
+
+
+def find_ambiguous_empmast_emp_codes(conn):
+    """EMP_CODEs with more than one CONSIDER='1' row in EMPMAST - for these,
+    fetch_rows' tie-break (highest trid) is an arbitrary guess, not a
+    confirmed rule, pending HR/IT confirming what actually marks an
+    employee's current department/location row. One-off diagnostic, not
+    called from the regular nightly import."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT EMP_CODE
+        FROM EMPMAST
+        WHERE CONSIDER = '1'
+        GROUP BY EMP_CODE
+        HAVING COUNT(*) > 1
+    """)
+    return [row["EMP_CODE"] for row in cursor.fetchall()]
 
 
 def build_rows(rows, imported_at):
