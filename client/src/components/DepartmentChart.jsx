@@ -1,3 +1,7 @@
+function truncate(s, n) {
+  return s && s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
 const SERIES = [
   { key: "early", label: "Early", color: "var(--early)" },
   { key: "late", label: "Late", color: "var(--late)" },
@@ -55,7 +59,7 @@ export default function DepartmentChart({ byDepartment }) {
                 return (
                   <rect key={s.key} x={x} y={PAD_T + plotH - barH} width={barW} height={barH} rx={3} fill={s.color}>
                     <title>
-                      {r.department} &middot; {s.label}: {v.toLocaleString()}
+                      {r.department_name ? `${r.department_name} (${r.department})` : r.department} &middot; {s.label}: {v.toLocaleString()}
                     </title>
                   </rect>
                 );
@@ -68,7 +72,7 @@ export default function DepartmentChart({ byDepartment }) {
                 fill="var(--text-secondary)"
                 transform={`rotate(-35 ${cx} ${H - PAD_B + 14})`}
               >
-                {r.department}
+                {truncate(r.department_name || r.department, 14)}
               </text>
             </g>
           );

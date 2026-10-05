@@ -8,7 +8,7 @@ import OutliersTable from "./components/OutliersTable";
 import CombosTable from "./components/CombosTable";
 import LoadingOverlay from "./components/LoadingOverlay";
 import Login from "./components/Login";
-import { getMeta, getFilters, getOutliers, getCombos, getStats, getSession, logout, outliersCsvUrl } from "./lib/api";
+import { getMeta, getFilters, getOutliers, getCombos, getStats, getSession, logout, outliersCsvUrl, combosCsvUrl } from "./lib/api";
 
 const PAGE_SIZE = 50;
 
@@ -70,6 +70,22 @@ export default function App() {
     setPage(1);
   }, [filters?.start, filters?.end, filters?.location, filters?.department, filters?.flag, filters?.search]);
 
+  // Departments are location-scoped (some locations only ever use a
+  // handful of the 189 total) - refetch the department list whenever the
+  // selected location changes. FiltersBar resets `department` back to ""
+  // on a location change, so there's never a stale selection invalid for
+  // the new location.
+  useEffect(() => {
+    if (!filters) return;
+    let cancelled = false;
+    getFilters({ location: filters.location }).then((f) => {
+      if (!cancelled) setOptions((o) => ({ ...o, departments: f.departments }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filters?.location]);
+
   useEffect(() => {
     if (!filters) return;
     let cancelled = false;
@@ -124,7 +140,7 @@ export default function App() {
         filters={filters}
         options={options}
         onChange={setFilters}
-        onExport={() =>
+        onExportOutliers={() =>
           window.open(
             outliersCsvUrl({
               start: filters.start,
@@ -132,6 +148,18 @@ export default function App() {
               location: filters.location,
               department: filters.department,
               flag: filters.flag,
+              search: filters.search,
+            }),
+            "_blank"
+          )
+        }
+        onExportCombos={() =>
+          window.open(
+            combosCsvUrl({
+              start: filters.start,
+              end: filters.end,
+              location: filters.location,
+              department: filters.department,
               search: filters.search,
             }),
             "_blank"
@@ -145,7 +173,7 @@ export default function App() {
           <Panel title="Clock-in outcomes by weekday">{stats && <WeekdayChart byWeekday={stats.by_weekday} />}</Panel>
           <Panel title="Early / Late by department">{stats && <DepartmentChart byDepartment={stats.by_department} />}</Panel>
         </section>
-        <Panel title="Friday-early &rarr; Monday-late combos">
+        <Panel title="Weekend Extension Pattern">
           <CombosTable data={combos} />
         </Panel>
         <Panel title="Outliers">

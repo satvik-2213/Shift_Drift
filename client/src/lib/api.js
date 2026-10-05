@@ -22,7 +22,7 @@ async function getJSON(path, params = {}) {
 }
 
 export const getMeta = () => getJSON("/meta");
-export const getFilters = () => getJSON("/filters");
+export const getFilters = (params) => getJSON("/filters", params);
 export const getSession = () => getJSON("/session");
 
 export async function login(username, password) {
@@ -44,10 +44,13 @@ export const getOutliers = (params) => getJSON("/outliers", params);
 export const getCombos = (params) => getJSON("/combos", params);
 export const getStats = (params) => getJSON("/stats", params);
 
-export function outliersCsvUrl(params) {
+function csvUrl(path, params) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== "") query.set(key, value);
   }
-  return `${BASE}/outliers.csv?${query.toString()}`;
+  return `${BASE}${path}?${query.toString()}`;
 }
+
+export const outliersCsvUrl = (params) => csvUrl("/outliers.csv", params);
+export const combosCsvUrl = (params) => csvUrl("/combos.csv", params);

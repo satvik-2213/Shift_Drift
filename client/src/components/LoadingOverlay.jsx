@@ -11,7 +11,7 @@ export default function LoadingOverlay({ show }) {
           className="h-3.5 w-3.5 flex-none animate-spin rounded-full border-2 border-[color:var(--accent)] border-t-transparent"
           style={{ borderTopColor: "transparent" }}
         />
-        <span className="text-xs font-medium text-[color:var(--text-secondary)]">Updating&hellip;</span>
+        <span className="text-xs font-medium text-[color:var(--text-secondary)]">Loading&hellip;</span>
       </div>
     </div>
   );

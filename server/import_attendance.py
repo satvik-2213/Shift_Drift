@@ -93,8 +93,8 @@ def fetch_rows(conn, target_date):
             d.SHIFTCODE  AS ShiftCode,
             d.FirstIn    AS FirstIn,
             e.EMP_NAME   AS EmpName,
-            e.DEPT_CODE  AS Department,
-            e.location_ID AS LocationID,
+            LTRIM(RTRIM(e.DEPT_CODE))   AS Department,
+            LTRIM(RTRIM(e.location_ID)) AS LocationID,
             td.desgdesc  AS Designation
         FROM DAYFILE d
         OUTER APPLY (

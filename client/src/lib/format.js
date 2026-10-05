@@ -13,3 +13,12 @@ export function minutesToClock(minutes) {
 }
 
 export const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Display-only - the underlying value stays ISO (YYYY-MM-DD) everywhere
+// (API params, state, sorting/comparison all depend on that); this just
+// reformats it for showing to the user. DD-MM-YYYY site-wide, no exceptions.
+export function formatDateDMY(iso) {
+  if (!iso) return "-";
+  const [y, m, d] = iso.split("-");
+  return `${d}-${m}-${y}`;
+}

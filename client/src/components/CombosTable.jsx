@@ -1,4 +1,4 @@
-import { minutesToClock } from "../lib/format";
+import { minutesToClock, formatDateDMY } from "../lib/format";
 
 // Mirrors BUCKET_RANGE in server/shift_rules.py - shown as a hover hint only,
 // not used for any calculation (the server already classified every row).
@@ -50,15 +50,18 @@ export default function CombosTable({ data }) {
                   <div className="font-medium text-[color:var(--text-primary)]">{c.friday.emp_name || c.friday.emp_id}</div>
                   <div className="text-xs text-[color:var(--text-muted)]">{c.friday.emp_id}</div>
                 </Td>
-                <Td>{c.friday.department}</Td>
-                <Td className="tabular">{c.friday.date}</Td>
+                <Td>
+                  <div className="text-[color:var(--text-primary)]">{c.friday.department_name || c.friday.department}</div>
+                  {c.friday.department_name && <div className="text-xs text-[color:var(--text-muted)]">{c.friday.department}</div>}
+                </Td>
+                <Td className="tabular">{formatDateDMY(c.friday.date)}</Td>
                 <Td className="tabular" style={{ color: "var(--early)" }}>
                   {minutesToClock(c.friday.first_in_min)}
                 </Td>
                 <Td>
                   <ShiftBadge code={c.friday.shift_code} bucket={c.friday.assigned_bucket} />
                 </Td>
-                <Td className="tabular">{c.monday.date}</Td>
+                <Td className="tabular">{formatDateDMY(c.monday.date)}</Td>
                 <Td className="tabular" style={{ color: "var(--late)" }}>
                   {minutesToClock(c.monday.first_in_min)}
                 </Td>
@@ -71,7 +74,7 @@ export default function CombosTable({ data }) {
             {combos.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-3 py-6 text-center text-[color:var(--text-muted)]">
-                  No Friday-early &rarr; Monday-late combos in range.
+                  No weekend extension pattern found in range.
                 </td>
               </tr>
             )}

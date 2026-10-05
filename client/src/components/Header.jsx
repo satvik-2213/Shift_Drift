@@ -1,4 +1,5 @@
 import logo from "../assets/laurus-logo.png";
+import { formatDateDMY } from "../lib/format";
 
 export default function Header({ meta, onLogout }) {
   return (
@@ -12,7 +13,7 @@ export default function Header({ meta, onLogout }) {
         {meta && (
           <div className="text-right text-xs text-[color:var(--text-muted)]">
             <div>
-              Data: {meta.earliest_date} &ndash; {meta.last_import_date}
+              Data: {formatDateDMY(meta.earliest_date)} &ndash; {formatDateDMY(meta.last_import_date)}
             </div>
             <div>{meta.total_rows?.toLocaleString()} rows</div>
           </div>
@@ -20,7 +21,8 @@ export default function Header({ meta, onLogout }) {
         <button
           type="button"
           onClick={onLogout}
-          className="rounded-lg border border-[color:var(--border-strong)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--text-secondary)] transition-colors hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+          className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-opacity hover:opacity-80"
+          style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
         >
           Sign out
         </button>

@@ -47,6 +47,14 @@ SESSION_COOKIE = "sd_session"
 SESSIONS = set()  # valid session tokens - in-memory, cleared on restart
 
 
+def _to_dmy(iso_date):
+    """Display-only: CSV exports show DD-MM-YYYY (matching the dashboard
+    UI) - everywhere else (DB storage, the JSON API, date-range query
+    params) stays ISO YYYY-MM-DD, which sorts/compares correctly."""
+    y, m, d = iso_date.split("-")
+    return f"{d}-{m}-{y}"
+
+
 def load_env_file(path):
     """Minimal KEY=VALUE .env loader (stdlib only) - doesn't override
     anything already set in the real environment. Strips one layer of
@@ -228,13 +236,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/meta":
                 self._handle_meta()
             elif path == "/api/filters":
-                self._handle_filters()
+                self._handle_filters(params)
             elif path == "/api/outliers":
                 self._handle_outliers(params)
             elif path == "/api/outliers.csv":
                 self._handle_outliers_csv(params)
             elif path == "/api/combos":
                 self._handle_combos(params)
+            elif path == "/api/combos.csv":
+                self._handle_combos_csv(params)
             elif path == "/api/stats":
                 self._handle_stats(params)
             else:
@@ -265,10 +275,10 @@ class Handler(BaseHTTPRequestHandler):
         meta["rules_version"] = shift_rules.RULES_VERSION
         self._send_json(meta)
 
-    def _handle_filters(self):
+    def _handle_filters(self, params):
         conn = db.get_connection()
         try:
-            self._send_json(db.query_filters(conn))
+            self._send_json(db.query_filters(conn, location=_param(params, "location")))
         finally:
             conn.close()
 
@@ -305,8 +315,11 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+        for row in rows:
+            row["date"] = _to_dmy(row["date"])
+
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=db.COLUMNS)
+        writer = csv.DictWriter(buf, fieldnames=db.OUTLIER_CSV_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
         body = buf.getvalue().encode("utf-8")
@@ -331,6 +344,57 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self._send_json({"total": len(combos), "combos": combos})
+
+    COMBO_CSV_COLUMNS = [
+        "emp_id", "emp_name", "department", "department_name", "location_id", "designation",
+        "friday_date", "friday_shift_code", "friday_clock_in",
+        "monday_date", "monday_shift_code", "monday_clock_in",
+        "weekend_count",
+    ]
+
+    def _handle_combos_csv(self, params):
+        start, end = _parse_date_range(params)
+        conn = db.get_connection()
+        try:
+            combos = db.query_combos(
+                conn, start, end,
+                location=_param(params, "location"),
+                department=_param(params, "department"),
+                search=_param(params, "search"),
+            )
+        finally:
+            conn.close()
+
+        def clock(minutes):
+            return f"{minutes // 60:02d}:{minutes % 60:02d}" if minutes is not None else ""
+
+        rows = []
+        for c in combos:
+            fri, mon = c["friday"], c["monday"]
+            rows.append({
+                "emp_id": fri["emp_id"], "emp_name": fri["emp_name"],
+                "department": fri["department"], "department_name": fri["department_name"],
+                "location_id": fri["location_id"],
+                "designation": fri["designation"],
+                "friday_date": _to_dmy(fri["date"]), "friday_shift_code": fri["shift_code"],
+                "friday_clock_in": clock(fri["first_in_min"]),
+                "monday_date": _to_dmy(mon["date"]), "monday_shift_code": mon["shift_code"],
+                "monday_clock_in": clock(mon["first_in_min"]),
+                "weekend_count": c["weekend_count"],
+            })
+
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=self.COMBO_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+        body = buf.getvalue().encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="weekend_combos_{start}_{end}.csv"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_stats(self, params):
         start, end = _parse_date_range(params)
