@@ -14,8 +14,9 @@ re-running a date (backfill, retry) is idempotent and every other date's
 history is left untouched. To seed a longer backfill in one go, use
 server/backfill.py instead of calling this script in a loop.
 
-Connection settings come from environment variables so credentials never
-get committed:
+Connection settings come from environment variables (loaded from server/.env
+automatically, same as every other script here - no need to `export` them
+into the shell yourself) so credentials never get committed:
     DB_SERVER     e.g. 10.0.1.25  or myserver\\SQLEXPRESS
     DB_PORT       default 1433
     DB_NAME       default laurus
@@ -34,6 +35,31 @@ import pymssql
 
 import db
 import shift_rules
+
+ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+
+
+def load_env_file(path):
+    """Minimal KEY=VALUE .env loader (stdlib only) - same pattern as every
+    other script in this project (app.py, import_employee_roster.py, ...).
+    Doesn't override anything already set in the real environment, so an
+    explicit `export DB_SERVER=...` before running this still wins."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file(ENV_PATH)
 
 # WH (weekly holiday) and anything not in this list is deliberately excluded -
 # there's no shift window to compare attendance against for those rows.
