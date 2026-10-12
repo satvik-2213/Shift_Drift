@@ -1,4 +1,5 @@
 server/.env
+server/users_seed.json
 server/output/
 __pycache__/
 *.pyc

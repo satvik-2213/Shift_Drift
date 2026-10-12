@@ -77,13 +77,21 @@ def fetch_rows(conn, target_date):
     (desgcode, location_id), not just desgcode - a plain LEFT JOIN on either
     fans one DAYFILE row out into several duplicates. The OUTER APPLYs below
     pick exactly one row from each:
-      - EMPMAST: prefer CONSIDER='1' (the "active assignment" flag), tie-broken
-        by highest trid - an arbitrary but deterministic choice for the
-        employees who have more than one CONSIDER='1' row (see
-        find_ambiguous_empmast_emp_codes), pending HR confirming the real rule.
-      - tabDesignation: prefer the row whose location_id matches the chosen
-        EMPMAST row's location (case/whitespace-insensitive), falling back to
+      - EMPMAST: prefer CONSIDER='0' - confirmed with HR/IT as the flag
+        marking the row to use, tie-broken by highest trid for the
+        employees who have more than one CONSIDER='0' row (see
+        find_ambiguous_empmast_emp_codes). Only used here for EMP_NAME and
+        DESIGN (designation code) - NOT department/location, see below.
+      - tabDesignation: prefer the row whose location_id matches the punch's
+        own DAYFILE location (case/whitespace-insensitive), falling back to
         any row for that desgcode if no location match exists.
+
+    Department/location come straight from DAYFILE's own DEPT_CODE/Location_Id
+    columns, not from the EMPMAST row - verified against real data that
+    EMPMAST.location_id can sit stuck at a stale/placeholder value (e.g. "HO")
+    for months after someone's actually working elsewhere, while DAYFILE's
+    own columns are populated fresh on every punch and reflect where the
+    employee is actually clocking in that day.
     """
     shift_list = ",".join(f"'{code}'" for code in KNOWN_SHIFT_CODES)
     query = f"""
@@ -93,22 +101,22 @@ def fetch_rows(conn, target_date):
             d.SHIFTCODE  AS ShiftCode,
             d.FirstIn    AS FirstIn,
             e.EMP_NAME   AS EmpName,
-            LTRIM(RTRIM(e.DEPT_CODE))   AS Department,
-            LTRIM(RTRIM(e.location_ID)) AS LocationID,
+            LTRIM(RTRIM(d.DEPT_CODE))    AS Department,
+            LTRIM(RTRIM(d.Location_Id))  AS LocationID,
             td.desgdesc  AS Designation
         FROM DAYFILE d
         OUTER APPLY (
             SELECT TOP 1 em.*
             FROM EMPMAST em
             WHERE em.EMP_CODE = d.EMP_CODE
-            ORDER BY CASE WHEN em.CONSIDER = '1' THEN 0 ELSE 1 END, em.trid DESC
+            ORDER BY CASE WHEN em.CONSIDER = '0' THEN 0 ELSE 1 END, em.trid DESC
         ) e
         OUTER APPLY (
             SELECT TOP 1 td2.desgdesc
             FROM tabDesignation td2
             WHERE td2.desgcode = TRY_CAST(e.DESIGN AS INT)
             ORDER BY CASE
-                WHEN UPPER(LTRIM(RTRIM(td2.location_id))) = UPPER(LTRIM(RTRIM(e.location_ID))) THEN 0
+                WHEN UPPER(LTRIM(RTRIM(td2.location_id))) = UPPER(LTRIM(RTRIM(d.Location_Id))) THEN 0
                 ELSE 1
             END
         ) td
@@ -123,16 +131,15 @@ def fetch_rows(conn, target_date):
 
 
 def find_ambiguous_empmast_emp_codes(conn):
-    """EMP_CODEs with more than one CONSIDER='1' row in EMPMAST - for these,
-    fetch_rows' tie-break (highest trid) is an arbitrary guess, not a
-    confirmed rule, pending HR/IT confirming what actually marks an
-    employee's current department/location row. One-off diagnostic, not
-    called from the regular nightly import."""
+    """EMP_CODEs with more than one CONSIDER='0' row in EMPMAST - for these,
+    fetch_rows' tie-break (highest trid) is still an arbitrary pick among
+    the otherwise-equally-valid rows. One-off diagnostic, not called from
+    the regular nightly import."""
     cursor = conn.cursor()
     cursor.execute("""
         SELECT EMP_CODE
         FROM EMPMAST
-        WHERE CONSIDER = '1'
+        WHERE CONSIDER = '0'
         GROUP BY EMP_CODE
         HAVING COUNT(*) > 1
     """)

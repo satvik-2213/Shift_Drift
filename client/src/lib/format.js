@@ -13,6 +13,19 @@ export function minutesToClock(minutes) {
 }
 
 export const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export const WEEKDAY_FULL_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Formats the `period` key returned by /api/attrition/trends ("YYYY-MM",
+// "YYYY-Qn", or "YYYY") into a short axis label, e.g. "Jan '25", "Q1 '25", "2025".
+export function formatPeriodLabel(period) {
+  const quarterMatch = period.match(/^(\d{4})-Q(\d)$/);
+  if (quarterMatch) return `Q${quarterMatch[2]} '${quarterMatch[1].slice(2)}`;
+  const monthMatch = period.match(/^(\d{4})-(\d{2})$/);
+  if (monthMatch) return `${MONTH_NAMES[Number(monthMatch[2]) - 1]} '${monthMatch[1].slice(2)}`;
+  return period;
+}
 
 // Display-only - the underlying value stays ISO (YYYY-MM-DD) everywhere
 // (API params, state, sorting/comparison all depend on that); this just

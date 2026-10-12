@@ -1,51 +1,21 @@
-// Decorative split-screen panel for the login page - geometric motif (four
-// themed diamonds around a center mark) echoing the shape language of
-// Laurus's other internal tools, built from inline SVG/CSS (no stock art),
-// themed around shift/attendance/transport instead of documents.
+// Decorative split-screen panel for the login page - a single cohesive SVG
+// illustration (an ID/attendance card being clocked in and verified)
+// instead of the old composed-div diamond motif, themed around TAS's own
+// colors (client/src/index.css's --brand-1/2/3, sampled from the real logo).
 
-const ICONS = {
-  clock: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" />
-    </svg>
-  ),
-  calendar: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="17" rx="2" />
-      <path d="M16 2v4M8 2v4M3 10h18" />
-    </svg>
-  ),
-  pin: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 10c0 6.5-8 12-8 12s-8-5.5-8-12a8 8 0 0 1 16 0z" />
-      <circle cx="12" cy="10" r="2.6" />
-    </svg>
-  ),
-  users: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M16 20v-1.8a3.6 3.6 0 0 0-3.6-3.6H6.6A3.6 3.6 0 0 0 3 18.2V20" />
-      <circle cx="9.8" cy="8.4" r="3.4" />
-      <path d="M21 20v-1.8a3.6 3.6 0 0 0-2.6-3.46" />
-      <path d="M14.8 4.1a3.4 3.4 0 0 1 0 6.6" />
-    </svg>
-  ),
-};
-
-const DIAMONDS = [
-  { icon: "clock", color: "var(--brand-1)", pos: "top-0 left-1/2 -translate-x-1/2" },
-  { icon: "calendar", color: "var(--brand-2)", pos: "top-1/2 right-0 -translate-y-1/2" },
-  { icon: "users", color: "var(--brand-3)", pos: "bottom-0 left-1/2 -translate-x-1/2" },
-  { icon: "pin", color: "var(--brand-1)", pos: "top-1/2 left-0 -translate-y-1/2" },
+const FEATURES = [
+  { text: "Shift & punch-in tracking", color: "var(--brand-1)" },
+  { text: "Headcount & attrition insights", color: "var(--brand-2)" },
+  { text: "One-click exports for HR reports", color: "var(--brand-3)" },
 ];
 
 const DOTS = [
   { top: "8%", left: "12%", size: 10, color: "var(--brand-2)", opacity: 0.5 },
-  { top: "18%", left: "78%", size: 14, color: "var(--brand-1)", opacity: 0.35 },
+  { top: "18%", left: "80%", size: 14, color: "var(--brand-1)", opacity: 0.3 },
   { top: "42%", left: "6%", size: 8, color: "var(--brand-3)", opacity: 0.45 },
-  { top: "72%", left: "85%", size: 12, color: "var(--brand-2)", opacity: 0.4 },
-  { top: "85%", left: "22%", size: 9, color: "var(--brand-1)", opacity: 0.3 },
-  { top: "30%", left: "92%", size: 7, color: "var(--brand-3)", opacity: 0.4 },
+  { top: "74%", left: "86%", size: 12, color: "var(--brand-2)", opacity: 0.35 },
+  { top: "86%", left: "20%", size: 9, color: "var(--brand-1)", opacity: 0.3 },
+  { top: "28%", left: "92%", size: 7, color: "var(--brand-3)", opacity: 0.4 },
 ];
 
 export default function LoginIllustration() {
@@ -66,34 +36,70 @@ export default function LoginIllustration() {
         />
       ))}
 
-      <div className="relative h-72 w-72">
-        {DIAMONDS.map((d) => (
-          <div
-            key={d.icon}
-            className={`absolute flex h-32 w-32 rotate-45 items-center justify-center rounded-2xl shadow-sm ${d.pos}`}
-            style={{ background: d.color, opacity: 0.16 }}
-          />
-        ))}
-        {DIAMONDS.map((d) => (
-          <div key={`${d.icon}-icon`} className={`absolute flex h-32 w-32 items-center justify-center ${d.pos}`}>
-            <span className="h-7 w-7" style={{ color: d.color }}>
-              {ICONS[d.icon]}
-            </span>
-          </div>
-        ))}
-        <div className="absolute left-1/2 top-1/2 flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-[color:var(--bg-surface)] shadow-[var(--shadow)]">
-          <span className="text-[10px] font-extrabold uppercase tracking-wide" style={{ color: "var(--brand-1)" }}>
-            Shift
+      <div className="relative flex flex-col items-center gap-8">
+        <svg viewBox="0 0 320 300" className="h-72 w-72 drop-shadow-sm" role="img" aria-label="Attendance card being checked in and verified">
+          {/* ID / attendance card, slightly tilted */}
+          <g transform="rotate(-6 160 170)">
+            <rect x="55" y="105" width="210" height="130" rx="18" fill="var(--bg-surface)" stroke="var(--border-strong)" strokeWidth="1.5" />
+            <rect x="55" y="105" width="210" height="34" rx="18" fill="var(--brand-1)" />
+            <rect x="55" y="121" width="210" height="18" fill="var(--brand-1)" />
+            <text x="160" y="129" textAnchor="middle" fontSize="19" fontWeight="800" letterSpacing="4" fill="#ffffff">
+              TAS
+            </text>
+
+            {/* avatar */}
+            <circle cx="98" cy="178" r="24" fill="var(--bg-surface-2)" stroke="var(--brand-1)" strokeWidth="2" />
+            <circle cx="98" cy="171" r="8.5" fill="var(--brand-1)" opacity="0.55" />
+            <path d="M80 194c3-10 11-15 18-15s15 5 18 15" fill="var(--brand-1)" opacity="0.55" />
+
+            {/* name / id lines */}
+            <rect x="136" y="162" width="100" height="9" rx="4.5" fill="var(--border-strong)" />
+            <rect x="136" y="180" width="68" height="7" rx="3.5" fill="var(--gridline)" />
+            <rect x="74" y="213" width="162" height="7" rx="3.5" fill="var(--bg-surface-3)" />
+          </g>
+
+          {/* clock, overlapping the card's top-right corner */}
+          <g>
+            <circle cx="238" cy="96" r="38" fill="var(--bg-surface)" stroke="var(--brand-1)" strokeWidth="3" />
+            {Array.from({ length: 12 }).map((_, i) => {
+              const angle = (i * 30 * Math.PI) / 180;
+              const x1 = 238 + 30 * Math.sin(angle);
+              const y1 = 96 - 30 * Math.cos(angle);
+              const x2 = 238 + 34 * Math.sin(angle);
+              const y2 = 96 - 34 * Math.cos(angle);
+              return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--border-strong)" strokeWidth="2" strokeLinecap="round" />;
+            })}
+            <line x1="238" y1="96" x2="238" y2="76" stroke="var(--brand-1)" strokeWidth="3.5" strokeLinecap="round" />
+            <line x1="238" y1="96" x2="255" y2="104" stroke="var(--brand-2)" strokeWidth="3" strokeLinecap="round" />
+            <circle cx="238" cy="96" r="3.5" fill="var(--brand-1)" />
+          </g>
+
+          {/* verified / checked-in badge, overlapping the card's bottom-left corner */}
+          <g>
+            <circle cx="82" cy="233" r="27" fill="var(--brand-3)" />
+            <circle cx="82" cy="233" r="27" fill="none" stroke="var(--bg-surface)" strokeWidth="3" />
+            <path d="M70 233l8 8 16-17" fill="none" stroke="#ffffff" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+          </g>
+        </svg>
+
+        <div className="flex flex-col items-center gap-2">
+          <span className="text-4xl font-extrabold uppercase tracking-[0.12em]">
+            <span style={{ color: "var(--brand-1)" }}>TA</span>
+            <span style={{ color: "var(--brand-2)" }}>S</span>
           </span>
-          <span className="text-[10px] font-extrabold uppercase tracking-wide" style={{ color: "var(--brand-2)" }}>
-            Drift
-          </span>
+          <span className="h-1 w-14 rounded-full" style={{ background: "var(--brand-3)" }} />
+          <p className="text-sm font-semibold tracking-wide text-[color:var(--text-secondary)]">Time &amp; Attendance System</p>
+        </div>
+
+        <div className="flex flex-col gap-2.5 rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)]/70 px-6 py-4 shadow-[var(--shadow)] backdrop-blur-sm">
+          {FEATURES.map((f) => (
+            <div key={f.text} className="flex items-center gap-2.5 text-sm font-medium text-[color:var(--text-secondary)]">
+              <span className="h-1.5 w-1.5 flex-none rounded-full" style={{ background: f.color }} />
+              {f.text}
+            </div>
+          ))}
         </div>
       </div>
-
-      <p className="absolute bottom-16 text-sm font-semibold tracking-wide text-[color:var(--text-secondary)]">
-        Attendance Pattern Detection
-      </p>
     </div>
   );
 }

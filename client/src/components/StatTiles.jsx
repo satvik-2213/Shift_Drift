@@ -1,28 +1,88 @@
-import { compactNumber } from "../lib/format";
+import { compactNumber, WEEKDAY_NAMES } from "../lib/format";
 
-const TILES = [
-  { key: "employees", label: "Employees" },
-  { key: "employee_days", label: "Employee-days" },
-  { key: "early", label: "Early", color: "var(--early)" },
-  { key: "late", label: "Late", color: "var(--late)" },
-  { key: "combo_flags", label: "Weekend-extension flags", color: "var(--late)" },
-  { key: "combo_employees", label: "Employees doing it", color: "var(--late)" },
-];
+// Employees with 3+ full-pattern occurrences in range - a one-off is noise,
+// a repeat is the behavior actually worth flagging. Computed client-side
+// from the combos already fetched for the table below, no extra query.
+const REPEAT_THRESHOLD = 3;
 
-export default function StatTiles({ stats }) {
+function rateNum(numerator, denominator) {
+  if (!denominator) return null;
+  return (numerator / denominator) * 100;
+}
+
+function formatRate(n) {
+  return n == null ? "0%" : `${n.toFixed(1)}%`;
+}
+
+function buildTiles(stats, combos) {
+  const dayPair = combos ? `${WEEKDAY_NAMES[combos.early_weekday]} early → ${WEEKDAY_NAMES[combos.late_weekday]} late` : null;
+  const repeatCounts = combos
+    ? combos.combos.filter((c) => c.pair_count >= REPEAT_THRESHOLD)
+    : [];
+  const repeatEmployees = new Set(repeatCounts.map((c) => c.day1.emp_id));
+  const worstCount = repeatCounts.reduce((max, c) => Math.max(max, c.pair_count), 0);
+
+  const lateRate = stats ? rateNum(stats.late, stats.employee_days) : null;
+  const earlyRate = stats ? rateNum(stats.early, stats.employee_days) : null;
+  const ontimeRate = stats ? 100 - (earlyRate ?? 0) - (lateRate ?? 0) : null;
+
+  return [
+    {
+      key: "employees",
+      label: "Employees",
+      value: stats ? compactNumber(stats.employees) : "-",
+    },
+    {
+      key: "employee_days",
+      label: "Employee-days",
+      value: stats ? compactNumber(stats.employee_days) : "-",
+      sub: stats ? `Early ${formatRate(earlyRate)} · On-time ${formatRate(ontimeRate)} · Late ${formatRate(lateRate)}` : null,
+    },
+    {
+      key: "employees_affected",
+      label: "Extension pattern",
+      value: stats ? compactNumber(stats.combo_employees) : "-",
+      color: "var(--accent)",
+      sub: stats ? `${formatRate(rateNum(stats.combo_employees, stats.employees))} of employees · ${dayPair}` : null,
+    },
+    {
+      key: "repeat_offenders",
+      label: `Repeat offenders (${REPEAT_THRESHOLD}+ times)`,
+      value: combos ? compactNumber(repeatEmployees.size) : "-",
+      color: "var(--late)",
+      sub: worstCount > 0 ? `Worst case: ${worstCount} times this range` : "None this range",
+      clickable: true,
+    },
+  ];
+}
+
+export default function StatTiles({ stats, combos, onRepeatOffendersClick }) {
+  const tiles = buildTiles(stats, combos);
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      {TILES.map((t) => (
-        <div
-          key={t.key}
-          className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-4 shadow-[var(--shadow)]"
-        >
-          <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">{t.label}</div>
-          <div className="mt-1 text-2xl font-semibold" style={{ color: t.color ?? "var(--text-primary)" }}>
-            {stats ? compactNumber(stats[t.key]) : "-"}
-          </div>
-        </div>
-      ))}
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {tiles.map((t) => {
+        const Tag = t.clickable ? "button" : "div";
+        return (
+          <Tag
+            key={t.key}
+            type={t.clickable ? "button" : undefined}
+            onClick={t.clickable ? onRepeatOffendersClick : undefined}
+            className={`rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-4 text-left shadow-[var(--shadow)] ${
+              t.clickable ? "cursor-pointer transition-colors hover:border-[color:var(--accent)]" : ""
+            }`}
+            title={t.clickable ? `Filter the table below to ${REPEAT_THRESHOLD}+ occurrences` : undefined}
+          >
+            <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">
+              {t.label}
+              {t.clickable && <span className="text-[color:var(--accent)]">&#8964;</span>}
+            </div>
+            <div className="mt-1 text-2xl font-semibold" style={{ color: t.color ?? "var(--text-primary)" }}>
+              {t.value}
+            </div>
+            {t.sub && <div className="mt-0.5 truncate text-[11px] text-[color:var(--text-muted)]">{t.sub}</div>}
+          </Tag>
+        );
+      })}
     </div>
   );
 }

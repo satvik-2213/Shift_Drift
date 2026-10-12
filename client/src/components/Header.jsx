@@ -1,23 +1,33 @@
 import logo from "../assets/laurus-logo.png";
-import { formatDateDMY } from "../lib/format";
 
-export default function Header({ meta, onLogout }) {
+const TABS = [
+  { key: "shift-drift", label: "Shift Drift" },
+  { key: "attrition", label: "Attrition Rates" },
+];
+
+export default function Header({ meta, onLogout, tab, onTabChange }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <img src={logo} alt="Laurus Labs" className="h-9 w-auto flex-none" />
+    <header className="flex flex-none flex-wrap items-center justify-between gap-4 border-b border-[color:var(--border)] bg-[color:var(--bg-surface)] px-6 py-4">
+      <div className="flex items-center gap-4">
+        <img src={logo} alt="Laurus Labs" className="h-10 w-auto flex-none py-0.5" />
         <div className="h-8 w-px flex-none bg-[color:var(--border-strong)]" />
-        <h1 className="text-base font-bold tracking-tight text-[color:var(--text-primary)]">Shift Drift Dashboard</h1>
+        <nav className="flex items-center gap-2 text-base font-bold tracking-tight">
+          {TABS.map((t, i) => (
+            <span key={t.key} className="flex items-center gap-2">
+              {i > 0 && <span className="text-[color:var(--border-strong)]">|</span>}
+              <button
+                type="button"
+                onClick={() => onTabChange(t.key)}
+                className="transition-colors"
+                style={{ color: tab === t.key ? "var(--accent)" : "var(--text-muted)" }}
+              >
+                {t.label}
+              </button>
+            </span>
+          ))}
+        </nav>
       </div>
       <div className="flex items-center gap-3">
-        {meta && (
-          <div className="text-right text-xs text-[color:var(--text-muted)]">
-            <div>
-              Data: {formatDateDMY(meta.earliest_date)} &ndash; {formatDateDMY(meta.last_import_date)}
-            </div>
-            <div>{meta.total_rows?.toLocaleString()} rows</div>
-          </div>
-        )}
         <button
           type="button"
           onClick={onLogout}

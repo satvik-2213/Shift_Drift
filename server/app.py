@@ -16,6 +16,17 @@ Sessions live in memory only (lost on restart) and aren't marked Secure
 (this serves plain HTTP) - don't expose this past loopback/trusted-network
 without putting TLS in front of it first, same as the old Basic Auth note.
 
+Two kinds of login, same /api/login endpoint:
+  - Master admin (APP_USERNAME/APP_PASSWORD in server/.env) - unrestricted,
+    sees every location. A break-glass account, not tied to any one person.
+  - Everyone else: the db.app_users table (emp_id/password/role/locations -
+    see seed_app_users.py). An "admin" row there gets the same unrestricted
+    access as the master account; a "restricted" row is pinned to its own
+    locations (almost always one, but can be several - see
+    _effective_location) for every query, regardless of what `location` the
+    client sends - a non-admin can't see another branch's data just by
+    editing the request.
+
 Usage:
     python3 app.py [port]   # default 8787
 """
@@ -34,17 +45,25 @@ from urllib.parse import parse_qs, urlparse
 
 import db
 import shift_rules
+import xlsx_export
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLIENT_DIST = os.path.join(REPO_ROOT, "client", "dist")
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 
 MAX_RANGE_DAYS = 400
+# Trend snapshots (monthly/quarterly/yearly) are summaries, not row-level
+# exports, so they're allowed a much wider window than MAX_RANGE_DAYS - a
+# yearly view needs several years of history to be worth looking at.
+MAX_TREND_RANGE_DAYS = 1827
 DEFAULT_PAGE_SIZE = 200
 MAX_PAGE_SIZE = 1000
 
 SESSION_COOKIE = "sd_session"
-SESSIONS = set()  # valid session tokens - in-memory, cleared on restart
+# token -> {"role": "admin" | "employee", "location": str | None} - in-memory,
+# cleared on restart. "location" is only ever set for role "employee" (the
+# location that session is pinned to); it's None for admin (unrestricted).
+SESSIONS = {}
 
 
 def _to_dmy(iso_date):
@@ -87,7 +106,7 @@ def _param(params, key, default=None):
     return values[0]
 
 
-def _parse_date_range(params):
+def _parse_date_range(params, max_days=MAX_RANGE_DAYS):
     start = _param(params, "start")
     end = _param(params, "end")
     if not start or not end:
@@ -99,22 +118,58 @@ def _parse_date_range(params):
         raise ValueError("start/end must be YYYY-MM-DD")
     if start_d > end_d:
         raise ValueError("start must be on or before end")
-    if (end_d - start_d).days > MAX_RANGE_DAYS:
-        raise ValueError(f"date range too large (max {MAX_RANGE_DAYS} days)")
+    if (end_d - start_d).days > max_days:
+        raise ValueError(f"date range too large (max {max_days} days)")
     return start, end
 
 
-def _parse_weekday(params):
-    raw = _param(params, "weekday")
+def _parse_weekday(params, key="weekday", default=None):
+    raw = _param(params, key)
     if raw is None:
-        return None
+        return default
     try:
         weekday = int(raw)
     except ValueError:
-        raise ValueError("weekday must be an integer 0-6 (0=Sunday)")
+        raise ValueError(f"{key} must be an integer 0-6 (0=Sunday)")
     if not (0 <= weekday <= 6):
-        raise ValueError("weekday must be an integer 0-6 (0=Sunday)")
+        raise ValueError(f"{key} must be an integer 0-6 (0=Sunday)")
     return weekday
+
+
+def _parse_combo_days(params):
+    """early/late weekday pair for the flagged-pattern query (0=Sunday..
+    6=Saturday) - defaults to Friday-early -> Monday-late, the original
+    hardcoded pattern, so callers that don't pass these keep that behavior."""
+    early = _parse_weekday(params, "early_weekday", default=5)
+    late = _parse_weekday(params, "late_weekday", default=1)
+    if early == late:
+        raise ValueError("early_weekday and late_weekday must differ")
+    return early, late
+
+
+def _parse_combo_mode(params):
+    mode = _param(params, "mode", "both")
+    if mode not in ("both", "either"):
+        raise ValueError("mode must be 'both' or 'either'")
+    return mode
+
+
+def _parse_sort(params, columns, default):
+    """Which column a sortable table is ordered by, and which direction -
+    whitelisted against the given column map (db.OUTLIER_SORT_COLUMNS or
+    db.ROSTER_SORT_COLUMNS) so this never builds a SQL identifier out of raw
+    user input."""
+    sort = _param(params, "sort", default)
+    if sort not in columns:
+        raise ValueError(f"sort must be one of {sorted(columns)}")
+    direction = _param(params, "dir", "desc")
+    if direction not in ("asc", "desc"):
+        raise ValueError("dir must be 'asc' or 'desc'")
+    return sort, direction
+
+
+def _parse_outlier_sort(params):
+    return _parse_sort(params, db.OUTLIER_SORT_COLUMNS, "date")
 
 
 def _parse_pagination(params):
@@ -129,7 +184,11 @@ def _parse_pagination(params):
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        sys.stderr.write(f"{self.address_string()} - {format % args}\n")
+        # Raw IP, not BaseHTTPRequestHandler's default address_string() -
+        # that does a reverse DNS lookup (socket.getfqdn()) on every single
+        # request just to log it, which is pure latency for no benefit on
+        # a loopback-only internal tool.
+        sys.stderr.write(f"{self.client_address[0]} - {format % args}\n")
 
     def _send_json(self, payload, status=200, set_cookie=None):
         body = json.dumps(payload).encode("utf-8")
@@ -153,9 +212,33 @@ class Handler(BaseHTTPRequestHandler):
         morsel = jar.get(SESSION_COOKIE)
         return morsel.value if morsel else None
 
-    def _is_authenticated(self):
+    def _session_info(self):
         token = self._session_token()
-        return token is not None and token in SESSIONS
+        return SESSIONS.get(token) if token else None
+
+    def _is_authenticated(self):
+        return self._session_info() is not None
+
+    def _effective_location(self, params):
+        """The `location` a query should actually run with - a non-admin
+        (location-restricted) session never gets more than its own allowed
+        location(s), regardless of what the client sent, so scoping can't be
+        bypassed by editing the request. A single-location session always
+        gets that one location back. A multi-location session (e.g. one
+        manager covering several units) may narrow down to any ONE of its
+        own locations by requesting it - that's legitimate, not a bypass -
+        but a request for anything outside its allowed set, or no location
+        at all, falls back to its full allowed set. Admins (and the
+        unauthenticated-login-only path) get whatever `location` the client
+        asked for, with no restriction."""
+        info = self._session_info()
+        if not info or info["role"] != "employee":
+            return _param(params, "location")
+        allowed = info["location"]
+        if isinstance(allowed, (list, tuple, set)):
+            requested = _param(params, "location")
+            return requested if requested in allowed else list(allowed)
+        return allowed
 
     def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -173,15 +256,29 @@ class Handler(BaseHTTPRequestHandler):
         password = body.get("password", "")
         # compare_digest avoids leaking match-length via response timing
         if hmac.compare_digest(user, APP_USERNAME) and hmac.compare_digest(password, APP_PASSWORD):
-            token = secrets.token_urlsafe(32)
-            SESSIONS.add(token)
-            self._send_json({"ok": True}, status=200, set_cookie=f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict")
+            role, location = "admin", None
         else:
-            self._send_error_json("Invalid username or password", 401)
+            conn = db.get_connection()
+            try:
+                matched = db.verify_app_user(conn, user, password)
+            finally:
+                conn.close()
+            if matched is None:
+                self._send_error_json("Invalid username or password", 401)
+                return
+            role = "admin" if matched["role"] == "admin" else "employee"
+            location = None if role == "admin" else matched["locations"]
+        token = secrets.token_urlsafe(32)
+        SESSIONS[token] = {"role": role, "location": location}
+        self._send_json(
+            {"ok": True, "role": role, "location": location},
+            status=200,
+            set_cookie=f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict",
+        )
 
     def _handle_logout(self):
         token = self._session_token()
-        SESSIONS.discard(token)
+        SESSIONS.pop(token, None)
         self._send_json({"ok": True}, set_cookie=f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
 
     def _send_file(self, path, content_type=None):
@@ -225,7 +322,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/session":
-            self._send_json({"authenticated": self._is_authenticated()})
+            info = self._session_info()
+            if info:
+                self._send_json({"authenticated": True, "role": info["role"], "location": info["location"]})
+            else:
+                self._send_json({"authenticated": False})
             return
 
         if not self._is_authenticated():
@@ -247,6 +348,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_combos_csv(params)
             elif path == "/api/stats":
                 self._handle_stats(params)
+            elif path == "/api/headcount":
+                self._handle_headcount(params)
+            elif path == "/api/headcount.csv":
+                self._handle_headcount_csv(params)
+            elif path == "/api/headcount/exits":
+                self._handle_headcount_exits(params)
+            elif path == "/api/headcount/joins":
+                self._handle_headcount_joins(params)
+            elif path == "/api/attrition/trends":
+                self._handle_attrition_trends(params)
+            elif path == "/api/attrition/trends.csv":
+                self._handle_attrition_trends_csv(params)
+            elif path == "/api/attrition/trends.xlsx":
+                self._handle_attrition_trends_xlsx(params)
+            elif path == "/api/employees":
+                self._handle_employee_search(params)
             else:
                 self._send_error_json("not found", 404)
         except ValueError as e:
@@ -278,23 +395,29 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_filters(self, params):
         conn = db.get_connection()
         try:
-            self._send_json(db.query_filters(conn, location=_param(params, "location")))
+            self._send_json(db.query_filters(
+                conn,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+            ))
         finally:
             conn.close()
 
     def _handle_outliers(self, params):
         start, end = _parse_date_range(params)
         page, page_size = _parse_pagination(params)
+        sort, sort_dir = _parse_outlier_sort(params)
         conn = db.get_connection()
         try:
             total, rows = db.query_outliers(
                 conn, start, end,
-                location=_param(params, "location"),
+                location=self._effective_location(params),
                 department=_param(params, "department"),
                 flag=_param(params, "flag"),
                 search=_param(params, "search"),
                 weekday=_parse_weekday(params),
                 page=page, page_size=page_size,
+                sort=sort, sort_dir=sort_dir,
             )
         finally:
             conn.close()
@@ -306,7 +429,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             rows = db.query_outliers_all(
                 conn, start, end,
-                location=_param(params, "location"),
+                location=self._effective_location(params),
                 department=_param(params, "department"),
                 flag=_param(params, "flag"),
                 search=_param(params, "search"),
@@ -333,34 +456,54 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_combos(self, params):
         start, end = _parse_date_range(params)
+        early_weekday, late_weekday = _parse_combo_days(params)
+        mode = _parse_combo_mode(params)
         conn = db.get_connection()
         try:
             combos = db.query_combos(
                 conn, start, end,
-                location=_param(params, "location"),
+                location=self._effective_location(params),
                 department=_param(params, "department"),
                 search=_param(params, "search"),
+                early_weekday=early_weekday,
+                late_weekday=late_weekday,
+                mode=mode,
             )
         finally:
             conn.close()
-        self._send_json({"total": len(combos), "combos": combos})
+        payload = {
+            "total": len(combos), "combos": combos,
+            "early_weekday": early_weekday, "late_weekday": late_weekday,
+            "mode": mode,
+        }
+        if mode == "either":
+            payload["both_count"] = sum(1 for c in combos if c["match"] == "both")
+            payload["day1_only_count"] = sum(1 for c in combos if c["match"] == "day1_only")
+            payload["day2_only_count"] = sum(1 for c in combos if c["match"] == "day2_only")
+        self._send_json(payload)
 
     COMBO_CSV_COLUMNS = [
         "emp_id", "emp_name", "department", "department_name", "location_id", "designation",
-        "friday_date", "friday_shift_code", "friday_clock_in",
-        "monday_date", "monday_shift_code", "monday_clock_in",
-        "weekend_count",
+        "match",
+        "day1_date", "day1_shift_code", "day1_clock_in",
+        "day2_date", "day2_shift_code", "day2_clock_in",
+        "pair_count",
     ]
 
     def _handle_combos_csv(self, params):
         start, end = _parse_date_range(params)
+        early_weekday, late_weekday = _parse_combo_days(params)
+        mode = _parse_combo_mode(params)
         conn = db.get_connection()
         try:
             combos = db.query_combos(
                 conn, start, end,
-                location=_param(params, "location"),
+                location=self._effective_location(params),
                 department=_param(params, "department"),
                 search=_param(params, "search"),
+                early_weekday=early_weekday,
+                late_weekday=late_weekday,
+                mode=mode,
             )
         finally:
             conn.close()
@@ -370,17 +513,21 @@ class Handler(BaseHTTPRequestHandler):
 
         rows = []
         for c in combos:
-            fri, mon = c["friday"], c["monday"]
+            d1, d2 = c["day1"], c["day2"]
+            anchor = d1 or d2
             rows.append({
-                "emp_id": fri["emp_id"], "emp_name": fri["emp_name"],
-                "department": fri["department"], "department_name": fri["department_name"],
-                "location_id": fri["location_id"],
-                "designation": fri["designation"],
-                "friday_date": _to_dmy(fri["date"]), "friday_shift_code": fri["shift_code"],
-                "friday_clock_in": clock(fri["first_in_min"]),
-                "monday_date": _to_dmy(mon["date"]), "monday_shift_code": mon["shift_code"],
-                "monday_clock_in": clock(mon["first_in_min"]),
-                "weekend_count": c["weekend_count"],
+                "emp_id": anchor["emp_id"], "emp_name": anchor["emp_name"],
+                "department": anchor["department"], "department_name": anchor["department_name"],
+                "location_id": anchor["location_id"],
+                "designation": anchor["designation"],
+                "match": c.get("match", "both"),
+                "day1_date": _to_dmy(d1["date"]) if d1 else "",
+                "day1_shift_code": d1["shift_code"] if d1 else "",
+                "day1_clock_in": clock(d1["first_in_min"]) if d1 else "",
+                "day2_date": _to_dmy(d2["date"]) if d2 else "",
+                "day2_shift_code": d2["shift_code"] if d2 else "",
+                "day2_clock_in": clock(d2["first_in_min"]) if d2 else "",
+                "pair_count": c["pair_count"],
             })
 
         buf = io.StringIO()
@@ -391,23 +538,203 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", f'attachment; filename="weekend_combos_{start}_{end}.csv"')
+        self.send_header("Content-Disposition", f'attachment; filename="flagged_pattern_{mode}_{start}_{end}.csv"')
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def _handle_stats(self, params):
         start, end = _parse_date_range(params)
+        early_weekday, late_weekday = _parse_combo_days(params)
         conn = db.get_connection()
         try:
             stats = db.query_stats(
                 conn, start, end,
-                location=_param(params, "location"),
+                location=self._effective_location(params),
                 department=_param(params, "department"),
+                early_weekday=early_weekday,
+                late_weekday=late_weekday,
             )
         finally:
             conn.close()
         self._send_json(stats)
+
+    def _handle_headcount(self, params):
+        start, end = _parse_date_range(params)
+        conn = db.get_connection()
+        try:
+            headcount = db.query_headcount(
+                conn, start, end,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+        self._send_json(headcount)
+
+    HEADCOUNT_CSV_COLUMNS = [
+        "period_start", "period_end", "headcount_start",
+        "exits", "joins", "headcount_end", "attrition_rate",
+    ]
+
+    def _handle_headcount_csv(self, params):
+        start, end = _parse_date_range(params)
+        conn = db.get_connection()
+        try:
+            headcount = db.query_headcount(
+                conn, start, end,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+
+        row = {"period_start": _to_dmy(start), "period_end": _to_dmy(end), **headcount}
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=self.HEADCOUNT_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerow(row)
+        body = buf.getvalue().encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="headcount_{start}_{end}.csv"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_headcount_exits(self, params):
+        start, end = _parse_date_range(params)
+        page, page_size = _parse_pagination(params)
+        sort, sort_dir = _parse_sort(params, db.ROSTER_SORT_COLUMNS, "date_exited")
+        conn = db.get_connection()
+        try:
+            total, rows = db.query_exited_employees(
+                conn, start, end,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                search=_param(params, "search"),
+                page=page, page_size=page_size,
+                sort=sort, sort_dir=sort_dir,
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+        self._send_json({"total": total, "page": page, "page_size": page_size, "rows": rows})
+
+    def _handle_headcount_joins(self, params):
+        start, end = _parse_date_range(params)
+        page, page_size = _parse_pagination(params)
+        sort, sort_dir = _parse_sort(params, db.ROSTER_SORT_COLUMNS, "date_joined")
+        conn = db.get_connection()
+        try:
+            total, rows = db.query_joined_employees(
+                conn, start, end,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                search=_param(params, "search"),
+                page=page, page_size=page_size,
+                sort=sort, sort_dir=sort_dir,
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+        self._send_json({"total": total, "page": page, "page_size": page_size, "rows": rows})
+
+    def _handle_attrition_trends(self, params):
+        start, end = _parse_date_range(params, max_days=MAX_TREND_RANGE_DAYS)
+        granularity = _param(params, "granularity", "month")
+        if granularity not in ("month", "quarter", "year"):
+            raise ValueError("granularity must be one of month, quarter, year")
+        conn = db.get_connection()
+        try:
+            periods = db.query_attrition_trends(
+                conn, start, end, granularity,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+        self._send_json({"periods": periods})
+
+    TREND_CSV_COLUMNS = [
+        "period", "period_start", "period_end", "headcount_start",
+        "exits", "joins", "headcount_end", "attrition_rate",
+    ]
+
+    def _handle_attrition_trends_csv(self, params):
+        start, end = _parse_date_range(params, max_days=MAX_TREND_RANGE_DAYS)
+        granularity = _param(params, "granularity", "month")
+        if granularity not in ("month", "quarter", "year"):
+            raise ValueError("granularity must be one of month, quarter, year")
+        conn = db.get_connection()
+        try:
+            periods = db.query_attrition_trends(
+                conn, start, end, granularity,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+
+        rows = [{
+            **p,
+            "period_start": _to_dmy(p["period_start"]),
+            "period_end": _to_dmy(p["period_end"]),
+        } for p in periods]
+
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=self.TREND_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+        body = buf.getvalue().encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="attrition_trends_{granularity}_{start}_{end}.csv"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_attrition_trends_xlsx(self, params):
+        start, end = _parse_date_range(params, max_days=MAX_TREND_RANGE_DAYS)
+        granularity = _param(params, "granularity", "month")
+        if granularity not in ("month", "quarter", "year"):
+            raise ValueError("granularity must be one of month, quarter, year")
+        conn = db.get_connection()
+        try:
+            periods = db.query_attrition_trends(
+                conn, start, end, granularity,
+                location=self._effective_location(params),
+                department=_param(params, "department"),
+                block=_param(params, "block"),
+            )
+        finally:
+            conn.close()
+
+        body = xlsx_export.build_trend_workbook(periods)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f'attachment; filename="attrition_trend_{granularity}_{start}_{end}.xlsx"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_employee_search(self, params):
+        search = _param(params, "search")
+        if not search:
+            raise ValueError("search query param is required")
+        conn = db.get_connection()
+        try:
+            rows = db.query_employee_search(conn, search, location=self._effective_location(params))
+        finally:
+            conn.close()
+        self._send_json({"rows": rows})
 
 
 def main():

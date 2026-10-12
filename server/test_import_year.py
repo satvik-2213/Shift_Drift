@@ -79,8 +79,8 @@ def main():
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(ambiguous))
-            print(f"{len(ambiguous)} employees have >1 CONSIDER='1' EMPMAST row - "
-                  f"their department/location was picked by an unconfirmed tie-break "
+            print(f"{len(ambiguous)} employees have >1 CONSIDER='0' EMPMAST row - "
+                  f"their department/location was picked by an arbitrary tie-break "
                   f"(highest trid). List written to {log_path} for HR follow-up.\n")
 
         total_fetched = total_skipped = total_days = 0

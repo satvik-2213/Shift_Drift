@@ -6,6 +6,8 @@ const MONTH_LABELS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const YEAR_GRID_SIZE = 12;
 
 function toDateStr(y, m, d) {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -29,6 +31,10 @@ export default function DatePickerField({ value, onChange }) {
   const committed = parse(value);
   const [viewY, setViewY] = useState(committed.y);
   const [viewM, setViewM] = useState(committed.m);
+  // "days" (default) -> click the month or year label -> "months" / "years"
+  // list, so jumping to a distant month/year doesn't mean clicking the prev/
+  // next arrow over and over. Picking a month/year returns to "days".
+  const [view, setView] = useState("days");
   const ref = useRef(null);
 
   useEffect(() => {
@@ -36,6 +42,7 @@ export default function DatePickerField({ value, onChange }) {
     const p = parse(value);
     setViewY(p.y);
     setViewM(p.m);
+    setView("days");
   }, [open, value]);
 
   useEffect(() => {
@@ -64,11 +71,24 @@ export default function DatePickerField({ value, onChange }) {
     setOpen(false);
   };
 
+  const pickMonth = (m) => {
+    setViewM(m);
+    setView("days");
+  };
+
+  const pickYear = (y) => {
+    setViewY(y);
+    setView("days");
+  };
+
   const firstOfMonth = new Date(viewY, viewM, 1).getDay(); // 0=Sun
   const daysInMonth = new Date(viewY, viewM + 1, 0).getDate();
   const cells = [];
   for (let i = 0; i < firstOfMonth; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const yearsStart = Math.floor(viewY / YEAR_GRID_SIZE) * YEAR_GRID_SIZE;
+  const years = Array.from({ length: YEAR_GRID_SIZE }, (_, i) => yearsStart + i);
 
   return (
     <div className="relative" ref={ref}>
@@ -82,46 +102,137 @@ export default function DatePickerField({ value, onChange }) {
       </button>
       {open && (
         <div className="absolute left-0 top-full z-10 mt-1.5 w-64 rounded-xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-3 shadow-[var(--shadow)]">
-          <div className="mb-2 flex items-center justify-between">
-            <NavBtn onClick={() => changeMonth(-1)} label="Previous month">
-              &lsaquo;
-            </NavBtn>
-            <span className="text-[13px] font-semibold text-[color:var(--text-primary)]">
-              {MONTH_LABELS[viewM]} {viewY}
-            </span>
-            <NavBtn onClick={() => changeMonth(1)} label="Next month">
-              &rsaquo;
-            </NavBtn>
-          </div>
-          <div className="grid grid-cols-7 gap-0.5 text-center text-[11px] text-[color:var(--text-muted)]">
-            {WEEKDAY_LABELS.map((w) => (
-              <div key={w} className="py-1 font-medium">
-                {w}
+          {view === "days" && (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <NavBtn onClick={() => changeMonth(-1)} label="Previous month">
+                  &lsaquo;
+                </NavBtn>
+                <span className="flex items-center gap-1">
+                  <HeaderLabel onClick={() => setView("months")}>{MONTH_LABELS[viewM]}</HeaderLabel>
+                  <HeaderLabel onClick={() => setView("years")}>{viewY}</HeaderLabel>
+                </span>
+                <NavBtn onClick={() => changeMonth(1)} label="Next month">
+                  &rsaquo;
+                </NavBtn>
               </div>
-            ))}
-            {cells.map((d, i) => {
-              if (d === null) return <div key={`pad-${i}`} />;
-              const isSelected = viewY === committed.y && viewM === committed.m && d === committed.d;
-              return (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => pickDay(d)}
-                  className={`rounded-md py-1 text-[12px] transition-colors ${
-                    isSelected
-                      ? "font-bold text-white"
-                      : "text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface-2)]"
-                  }`}
-                  style={isSelected ? { background: "var(--accent)" } : undefined}
-                >
-                  {d}
-                </button>
-              );
-            })}
-          </div>
+              <div className="grid grid-cols-7 gap-0.5 text-center text-[11px] text-[color:var(--text-muted)]">
+                {WEEKDAY_LABELS.map((w) => (
+                  <div key={w} className="py-1 font-medium">
+                    {w}
+                  </div>
+                ))}
+                {cells.map((d, i) => {
+                  if (d === null) return <div key={`pad-${i}`} />;
+                  const isSelected = viewY === committed.y && viewM === committed.m && d === committed.d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => pickDay(d)}
+                      className={`rounded-md py-1 text-[12px] transition-colors ${
+                        isSelected
+                          ? "font-bold text-white"
+                          : "text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface-2)]"
+                      }`}
+                      style={isSelected ? { background: "var(--accent)" } : undefined}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {view === "months" && (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <NavBtn onClick={() => setViewY(viewY - 1)} label="Previous year">
+                  &lsaquo;
+                </NavBtn>
+                <HeaderLabel onClick={() => setView("years")}>{viewY}</HeaderLabel>
+                <NavBtn onClick={() => setViewY(viewY + 1)} label="Next year">
+                  &rsaquo;
+                </NavBtn>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {MONTH_SHORT.map((label, m) => {
+                  const isSelected = viewY === committed.y && m === committed.m;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => pickMonth(m)}
+                      className={`rounded-md py-2 text-[12px] font-medium transition-colors ${
+                        isSelected
+                          ? "font-bold text-white"
+                          : m === viewM
+                            ? "text-[color:var(--accent)]"
+                            : "text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface-2)]"
+                      }`}
+                      style={isSelected ? { background: "var(--accent)" } : undefined}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {view === "years" && (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <NavBtn onClick={() => setViewY(viewY - YEAR_GRID_SIZE)} label="Previous years">
+                  &lsaquo;
+                </NavBtn>
+                <span className="text-[13px] font-semibold text-[color:var(--text-primary)]">
+                  {yearsStart} &ndash; {yearsStart + YEAR_GRID_SIZE - 1}
+                </span>
+                <NavBtn onClick={() => setViewY(viewY + YEAR_GRID_SIZE)} label="Next years">
+                  &rsaquo;
+                </NavBtn>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {years.map((y) => {
+                  const isSelected = y === committed.y;
+                  return (
+                    <button
+                      key={y}
+                      type="button"
+                      onClick={() => pickYear(y)}
+                      className={`rounded-md py-2 text-[12px] font-medium transition-colors ${
+                        isSelected
+                          ? "font-bold text-white"
+                          : y === viewY
+                            ? "text-[color:var(--accent)]"
+                            : "text-[color:var(--text-primary)] hover:bg-[color:var(--bg-surface-2)]"
+                      }`}
+                      style={isSelected ? { background: "var(--accent)" } : undefined}
+                    >
+                      {y}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function HeaderLabel({ children, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md px-1.5 py-0.5 text-[13px] font-semibold text-[color:var(--text-primary)] transition-colors hover:bg-[color:var(--bg-surface-2)] hover:text-[color:var(--accent)]"
+    >
+      {children}
+    </button>
   );
 }
 

@@ -1,1 +1,4 @@
 pymssql
+openpyxl
+celery
+redis

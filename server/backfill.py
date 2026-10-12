@@ -13,8 +13,34 @@ import_attendance.py.
 Usage:
     python3 backfill.py 2025-10-01 2026-09-30
 """
+import os
 import sys
 from datetime import datetime, timedelta
+
+ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+
+
+def load_env_file(path):
+    """Minimal KEY=VALUE .env loader (stdlib only) - doesn't override
+    anything already set in the real environment. Strips one layer of
+    matching quotes so a value like DB_PASSWORD='foo' isn't taken literally
+    with the quotes included."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file(ENV_PATH)
 
 import db
 import import_attendance as ia

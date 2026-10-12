@@ -9,12 +9,14 @@ already-stored rows after such a change.
 """
 
 # Minutes-since-midnight, inclusive on both ends - matches index.html's
-# BUCKET_RANGE exactly.
+# BUCKET_RANGE exactly. B and C now abut at 19:00 (one minute apart, same
+# as A/General's 07:30/07:31 split) instead of leaving a 16:00-20:00 gap
+# that fell outside every bucket and showed up as "Unclassified".
 BUCKET_RANGE = {
-    "A": (330, 450),        # 05:30-07:30
-    "General": (451, 720),  # 07:31-12:00
-    "B": (721, 960),        # 12:01-16:00
-    "C": (1200, 1380),      # 20:00-23:00
+    "A": (330, 450),         # 05:30-07:30
+    "General": (451, 720),   # 07:31-12:00
+    "B": (721, 1140),        # 12:01-19:00
+    "C": (1141, 1380),       # 19:01-23:00
 }
 
 # The real DAYFILE pipeline only ever sees these four codes (see
@@ -30,7 +32,7 @@ SHIFT_CODE_TO_BUCKET = {
 
 # Bumped whenever BUCKET_RANGE or SHIFT_CODE_TO_BUCKET changes, so stored rows
 # can be told apart from rows classified under a different rule set.
-RULES_VERSION = "2026-10-01"
+RULES_VERSION = "2026-10-06"
 
 
 def bucket_from_minutes(minutes):

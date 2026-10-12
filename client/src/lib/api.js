@@ -43,6 +43,11 @@ export async function logout() {
 export const getOutliers = (params) => getJSON("/outliers", params);
 export const getCombos = (params) => getJSON("/combos", params);
 export const getStats = (params) => getJSON("/stats", params);
+export const getHeadcount = (params) => getJSON("/headcount", params);
+export const getHeadcountExits = (params) => getJSON("/headcount/exits", params);
+export const getHeadcountJoins = (params) => getJSON("/headcount/joins", params);
+export const getAttritionTrends = (params) => getJSON("/attrition/trends", params);
+export const searchEmployees = (search) => getJSON("/employees", { search });
 
 function csvUrl(path, params) {
   const query = new URLSearchParams();
@@ -54,3 +59,6 @@ function csvUrl(path, params) {
 
 export const outliersCsvUrl = (params) => csvUrl("/outliers.csv", params);
 export const combosCsvUrl = (params) => csvUrl("/combos.csv", params);
+export const attritionTrendsCsvUrl = (params) => csvUrl("/attrition/trends.csv", params);
+export const attritionTrendsXlsxUrl = (params) => csvUrl("/attrition/trends.xlsx", params);
+export const headcountCsvUrl = (params) => csvUrl("/headcount.csv", params);

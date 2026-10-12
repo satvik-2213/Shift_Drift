@@ -4,6 +4,10 @@ import { login } from "../lib/api";
 import LoginIllustration from "./LoginIllustration";
 
 export default function Login({ onLoggedIn }) {
+  // One form, one field set - whoever's credentials match (admin or the
+  // single location-restricted employee account) decides the role and
+  // location server-side (see app.py's _handle_login); the login page
+  // itself doesn't ask or care which kind of account is signing in.
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -14,8 +18,8 @@ export default function Login({ onLoggedIn }) {
     setSubmitting(true);
     setError(null);
     try {
-      await login(username, password);
-      onLoggedIn();
+      const result = await login(username, password);
+      onLoggedIn(result);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -29,18 +33,18 @@ export default function Login({ onLoggedIn }) {
         <LoginIllustration />
       </div>
 
-      <div className="flex w-full items-center justify-center px-4 lg:w-1/2">
+      <div className="flex w-full flex-col items-center justify-center gap-6 px-4 lg:w-1/2">
         <form onSubmit={submit} className="w-full max-w-sm rounded-2xl bg-[color:var(--bg-surface)] p-9 shadow-[var(--shadow)]">
           <div className="flex flex-col items-center gap-1 text-center">
             <img src={logo} alt="Laurus Labs" className="h-11 w-auto" />
-            <p className="mt-2 text-sm font-semibold text-[color:var(--text-primary)]">Shift Drift Dashboard</p>
+            <p className="mt-2 text-sm font-semibold text-[color:var(--text-primary)]">TAS &mdash; Time &amp; Attendance System</p>
           </div>
 
           <div className="mt-8 flex flex-col gap-5">
-            <UnderlineField label="User Name" icon={<UserIcon />}>
+            <UnderlineField label="User Name / Employee ID" icon={<UserIcon />}>
               <input
                 className="w-full border-0 bg-transparent py-1.5 text-sm text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-muted)]"
-                placeholder="Username"
+                placeholder="User Name or Employee ID"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoFocus
@@ -70,6 +74,10 @@ export default function Login({ onLoggedIn }) {
             {submitting ? "Signing in…" : "Login"}
           </button>
         </form>
+
+        <p className="text-xs text-[color:var(--text-muted)]">
+          Trouble signing in? Contact <span className="font-semibold text-[color:var(--text-secondary)]">IT Support</span>.
+        </p>
       </div>
     </div>
   );

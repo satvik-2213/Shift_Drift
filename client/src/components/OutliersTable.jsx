@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { minutesToClock, formatDateDMY } from "../lib/format";
 
 const FLAG_COLOR = { Early: "var(--early)", "On-time": "var(--ontime)", Late: "var(--late)" };
@@ -12,6 +13,7 @@ const BUCKET_TO_CODE = { General: "GS", A: "AS", B: "BS", C: "CS" };
 // at a glance than two codes both ending in S.
 const CODE_LABEL = { GS: "Gen" };
 const shiftLabel = (code) => CODE_LABEL[code] ?? code;
+const SHIFT_CODES = ["GS", "AS", "BS", "CS"];
 
 function ShiftPill({ children, title }) {
   return (
@@ -24,13 +26,49 @@ function ShiftPill({ children, title }) {
   );
 }
 
-export default function OutliersTable({ data, page, pageSize, onPageChange }) {
+export default function OutliersTable({ data, page, pageSize, onPageChange, showFilters, colFilters, setColFilters, sort, onSort }) {
+  const setCol = (key) => (e) => setColFilters((f) => ({ ...f, [key]: e.target.value }));
+
+  const departmentOptions = useMemo(() => {
+    if (!data) return [];
+    const seen = new Map();
+    data.rows.forEach((r) => {
+      if (r.department && !seen.has(r.department)) seen.set(r.department, r.department_name || r.department);
+    });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const f = colFilters;
+    const active = Object.values(f).some(Boolean);
+    if (!active) return data.rows;
+    return data.rows.filter((r) => {
+      const camein = BUCKET_TO_CODE[r.derived_bucket] ?? r.derived_bucket ?? "";
+      return (
+        (!f.date || formatDateDMY(r.date).toLowerCase().includes(f.date.toLowerCase())) &&
+        (!f.employee || `${r.emp_name || ""} ${r.emp_id || ""} ${r.designation || ""}`.toLowerCase().includes(f.employee.toLowerCase())) &&
+        (!f.department || r.department === f.department) &&
+        (!f.location || String(r.location_id || "").toLowerCase().includes(f.location.toLowerCase())) &&
+        (!f.assigned || r.shift_code === f.assigned) &&
+        (!f.camein || camein === f.camein) &&
+        (!f.clockin || minutesToClock(r.first_in_min).toLowerCase().includes(f.clockin.toLowerCase())) &&
+        (!f.flag || r.flag === f.flag)
+      );
+    });
+  }, [data, colFilters]);
+
   if (!data) return null;
-  const { total, rows } = data;
+  const { total } = data;
+  const rows = filteredRows;
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  const filtered = rows.length !== data.rows.length;
 
   return (
     <div>
+      {/* No height cap - the whole table (all PAGE_SIZE rows) renders at its
+          natural height so opening Outliers reveals it in full by scrolling
+          the page down to it, not by scrolling inside a clipped box. */}
       <div className="overflow-x-auto rounded-xl border border-[color:var(--border)]">
         <table className="w-full min-w-[720px] table-fixed border-collapse text-left text-[13px]">
           <colgroup>
@@ -44,16 +82,62 @@ export default function OutliersTable({ data, page, pageSize, onPageChange }) {
             <col className="w-[14%]" />
           </colgroup>
           <thead>
-            <tr className="border-b border-[color:var(--border)] text-[11px] uppercase tracking-wide text-[color:var(--text-muted)]">
-              <Th>Date</Th>
-              <Th>Employee</Th>
-              <Th>Department</Th>
-              <Th>Location</Th>
-              <Th>Assigned</Th>
-              <Th>Came in as</Th>
-              <Th>Clock-in</Th>
-              <Th>Flag</Th>
+            <tr className="sticky top-0 z-10 border-b border-[color:var(--border)] bg-[color:var(--bg-surface)] text-[11px] uppercase tracking-wide text-[color:var(--text-muted)]">
+              <SortTh sortKey="date" sort={sort} onSort={onSort}>Date</SortTh>
+              <SortTh sortKey="employee" sort={sort} onSort={onSort}>Employee</SortTh>
+              <SortTh sortKey="department" sort={sort} onSort={onSort}>Department</SortTh>
+              <SortTh sortKey="location" sort={sort} onSort={onSort}>Location</SortTh>
+              <SortTh sortKey="assigned" sort={sort} onSort={onSort}>Assigned</SortTh>
+              <SortTh sortKey="camein" sort={sort} onSort={onSort}>Came in as</SortTh>
+              <SortTh sortKey="clockin" sort={sort} onSort={onSort}>Clock-in</SortTh>
+              <SortTh sortKey="flag" sort={sort} onSort={onSort}>Flag</SortTh>
             </tr>
+            {showFilters && (
+              <tr className="border-b border-[color:var(--border)] bg-[color:var(--bg-surface-2)]">
+                <Fth value={colFilters.date} onChange={setCol("date")} placeholder="Filter" />
+                <Fth value={colFilters.employee} onChange={setCol("employee")} placeholder="Search all pages" />
+                <th className="px-3 py-1.5 font-normal">
+                  <select value={colFilters.department} onChange={setCol("department")} className={selectClass}>
+                    <option value="">All</option>
+                    {departmentOptions.map(([code, name]) => (
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </th>
+                <Fth value={colFilters.location} onChange={setCol("location")} placeholder="Filter" />
+                <th className="px-3 py-1.5 font-normal">
+                  <select value={colFilters.assigned} onChange={setCol("assigned")} className={selectClass}>
+                    <option value="">All</option>
+                    {SHIFT_CODES.map((c) => (
+                      <option key={c} value={c}>
+                        {shiftLabel(c)}
+                      </option>
+                    ))}
+                  </select>
+                </th>
+                <th className="px-3 py-1.5 font-normal">
+                  <select value={colFilters.camein} onChange={setCol("camein")} className={selectClass}>
+                    <option value="">All</option>
+                    {SHIFT_CODES.map((c) => (
+                      <option key={c} value={c}>
+                        {shiftLabel(c)}
+                      </option>
+                    ))}
+                  </select>
+                </th>
+                <Fth value={colFilters.clockin} onChange={setCol("clockin")} placeholder="Filter" />
+                <th className="px-3 py-1.5 font-normal">
+                  <select value={colFilters.flag} onChange={setCol("flag")} className={selectClass}>
+                    <option value="">All</option>
+                    <option value="Early">Early</option>
+                    <option value="On-time">On-time</option>
+                    <option value="Late">Late</option>
+                  </select>
+                </th>
+              </tr>
+            )}
           </thead>
           <tbody>
             {rows.map((r) => (
@@ -67,7 +151,6 @@ export default function OutliersTable({ data, page, pageSize, onPageChange }) {
                 </Td>
                 <Td>
                   <div className="text-[color:var(--text-primary)]">{r.department_name || r.department}</div>
-                  {r.department_name && <div className="text-xs text-[color:var(--text-muted)]">{r.department}</div>}
                 </Td>
                 <Td>{r.location_id}</Td>
                 <Td>
@@ -91,7 +174,7 @@ export default function OutliersTable({ data, page, pageSize, onPageChange }) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-3 py-6 text-center text-[color:var(--text-muted)]">
-                  No rows in range.
+                  {filtered ? "No rows on this page match the column filters." : "No rows in range."}
                 </td>
               </tr>
             )}
@@ -99,7 +182,10 @@ export default function OutliersTable({ data, page, pageSize, onPageChange }) {
         </table>
       </div>
       <div className="mt-3 flex items-center justify-between text-xs text-[color:var(--text-muted)]">
-        <span>{total.toLocaleString()} total rows</span>
+        <span>
+          {total.toLocaleString()} total rows
+          {filtered && ` · column filters apply to this page only (${rows.length}/${data.rows.length} shown)`}
+        </span>
         <div className="flex items-center gap-2">
           <PageBtn disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
             Prev
@@ -116,8 +202,39 @@ export default function OutliersTable({ data, page, pageSize, onPageChange }) {
   );
 }
 
-function Th({ children }) {
-  return <th className="px-3 py-2 font-medium">{children}</th>;
+const selectClass =
+  "w-full rounded-md border border-[color:var(--border-strong)] bg-[color:var(--bg-surface)] px-1.5 py-1 text-xs text-[color:var(--text-primary)] outline-none focus:border-[color:var(--accent)]";
+
+function SortTh({ children, sortKey, sort, onSort }) {
+  const active = sort?.by === sortKey;
+  return (
+    <th className="px-3 py-2 font-medium">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-[color:var(--text-primary)]"
+        style={{ color: active ? "var(--accent)" : "inherit" }}
+      >
+        {children}
+        <span className="text-[9px]" aria-hidden="true">
+          {active ? (sort.dir === "asc" ? "▲" : "▼") : ""}
+        </span>
+      </button>
+    </th>
+  );
+}
+function Fth({ value, onChange, placeholder }) {
+  return (
+    <th className="px-3 py-1.5 font-normal">
+      <input
+        type="text"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="w-full rounded-md border border-[color:var(--border-strong)] bg-[color:var(--bg-surface)] px-1.5 py-1 text-xs normal-case tracking-normal text-[color:var(--text-primary)] outline-none focus:border-[color:var(--accent)]"
+      />
+    </th>
+  );
 }
 function Td({ children, className = "" }) {
   return <td className={`px-3 py-2 align-top ${className}`}>{children}</td>;
