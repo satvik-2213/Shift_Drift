@@ -55,7 +55,6 @@ export default function App() {
   const [page, setPage] = useState(1);
 
   const [stats, setStats] = useState(null);
-  const [prevStats, setPrevStats] = useState(null);
   const [combos, setCombos] = useState(null);
   const [headcount, setHeadcount] = useState(null);
   const [prevHeadcount, setPrevHeadcount] = useState(null);
@@ -193,19 +192,14 @@ export default function App() {
       department: filters.department,
     };
     const comboDays = { early_weekday: filters.earlyDay, late_weekday: filters.lateDay };
-    const prevRange = previousPeriod(filters.start, filters.end);
     Promise.all([
       getStats({ ...common, ...comboDays }),
       getCombos({ ...common, ...comboDays, search: filters.search }),
-      // Best-effort: if there's no data far enough back, the tiles just show
-      // no delta rather than failing the whole load.
-      getStats({ ...common, ...comboDays, ...prevRange }).catch(() => null),
     ])
-      .then(([s, c, ps]) => {
+      .then(([s, c]) => {
         if (cancelled) return;
         setStats(s);
         setCombos(c);
-        setPrevStats(ps);
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setDataLoading(false));
@@ -322,7 +316,6 @@ export default function App() {
               <div className="flex min-h-0 flex-col gap-3">
                 <StatTiles
                   stats={stats}
-                  prevStats={prevStats}
                   combos={combos}
                   onRepeatOffendersClick={() => setRepeatOffendersSignal((n) => n + 1)}
                 />
