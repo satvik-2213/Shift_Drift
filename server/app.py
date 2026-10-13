@@ -7,14 +7,17 @@ side (no Flask) - the API surface is a handful of GET/POST endpoints, the
 rest is static file serving out of client/dist/.
 
 Gated behind a session-cookie login (APP_USERNAME/APP_PASSWORD in
-server/.env) - still meant for localhost / internal-network use only, not
-for exposing beyond that. The static app shell (client/dist/) is served to
-anyone (it's just code, no data); every /api/* route except /api/login
-requires a valid session cookie, issued by POSTing credentials to
-/api/login - the React app shows its own login page when it gets a 401.
-Sessions live in memory only (lost on restart) and aren't marked Secure
-(this serves plain HTTP) - don't expose this past loopback/trusted-network
-without putting TLS in front of it first, same as the old Basic Auth note.
+server/.env) - meant to sit behind a TLS-terminating reverse proxy (e.g.
+nginx) on loopback, never exposed directly: this process itself still binds
+127.0.0.1 and speaks plain HTTP, and the session cookie is marked Secure
+(browsers then refuse to send it over any non-HTTPS connection), so local
+testing against this process directly - http://127.0.0.1:PORT, not through
+the proxy - won't keep a session; use the real https:// hostname instead.
+The static app shell (client/dist/) is served to anyone (it's just code, no
+data); every /api/* route except /api/login requires a valid session
+cookie, issued by POSTing credentials to /api/login - the React app shows
+its own login page when it gets a 401. Sessions live in memory only (lost
+on restart).
 
 Two kinds of login, same /api/login endpoint:
   - Master admin (APP_USERNAME/APP_PASSWORD in server/.env) - unrestricted,
@@ -273,15 +276,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(
             {"ok": True, "role": role, "location": location},
             status=200,
-            set_cookie=f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict",
+            set_cookie=f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Secure",
         )
 
     def _handle_logout(self):
         token = self._session_token()
         SESSIONS.pop(token, None)
-        self._send_json({"ok": True}, set_cookie=f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+        self._send_json({"ok": True}, set_cookie=f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0")
 
-    def _send_file(self, path, content_type=None):
+    def _send_file(self, path, content_type=None, cache_control=None):
         if not os.path.isfile(path):
             self._send_error_json("not found", 404)
             return
@@ -292,6 +295,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -299,7 +304,18 @@ class Handler(BaseHTTPRequestHandler):
         """Serves a file out of client/dist/ by its request path, falling
         back to index.html for any unknown path (client-side routing isn't
         used today, but this keeps a stray deep link from 404ing instead of
-        loading the app) - never outside CLIENT_DIST (path traversal)."""
+        loading the app) - never outside CLIENT_DIST (path traversal).
+
+        Cache-Control is deliberately split in two: every Vite build gives
+        its JS/CSS a fresh content hash in the filename (e.g.
+        index-CZbvMqV9.js), so those are safe to cache forever - a stale
+        copy simply never gets requested again, since the next build's
+        index.html points at different filenames. index.html itself is the
+        one thing that MUST be revalidated on every load, because it's what
+        names those filenames - caching it risks a browser serving a
+        pre-rebuild index.html that points at JS/CSS the new build already
+        deleted, which 404s and leaves the page blank until a hard refresh
+        bypasses the cache (the exact bug this fixes)."""
         rel = path.lstrip("/") or "index.html"
         full = os.path.normpath(os.path.join(CLIENT_DIST, rel))
         if not full.startswith(os.path.normpath(CLIENT_DIST)):
@@ -307,7 +323,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not os.path.isfile(full):
             full = os.path.join(CLIENT_DIST, "index.html")
-        self._send_file(full)
+        is_index = os.path.basename(full) == "index.html"
+        cache_control = "no-cache" if is_index else "public, max-age=31536000, immutable"
+        self._send_file(full, cache_control=cache_control)
 
     def do_GET(self):
         parsed = urlparse(self.path)
