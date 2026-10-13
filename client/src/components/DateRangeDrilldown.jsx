@@ -22,6 +22,17 @@ const WEEK_THRESHOLD_DAYS = 7;
 const MONTH_THRESHOLD_DAYS = 28;
 const MULTI_MONTH_THRESHOLD_DAYS = 60;
 
+// "DD/MM", no year - for the chart's x-axis only. A chunk's full range (not
+// just the day it starts on) still needs to show on multi-day chunks - the
+// last week/month chunk of a range is often a short tail (e.g. just the
+// 29th-30th), and labeling it with only its start date made that tail look
+// like missing data. This stays short enough to avoid the same label-
+// collision problem the full "DD-MM-YYYY–DD-MM-YYYY" format caused.
+function shortDate(iso) {
+  const [, m, d] = iso.split("-");
+  return `${d}/${m}`;
+}
+
 function daysInclusive(start, end) {
   return Math.round((new Date(end) - new Date(start)) / 86400000) + 1;
 }
@@ -278,13 +289,18 @@ export default function DateRangeDrilldown({ scope, headcount }) {
 
   // Chart data: the whole range as one bar group below a week (nothing to
   // break down into), otherwise one group per top-tier chunk (day/week/
-  // month, same breakdown the table itself expands into) - `period` is just
-  // a label here, not one of formatPeriodLabel's recognized codes, so it
-  // prints as-is.
+  // month, same breakdown the table itself expands into). Labeled with a
+  // short "DD/MM" (or "DD/MM–DD/MM" when the chunk spans more than one day) -
+  // not the full "DD-MM-YYYY–DD-MM-YYYY" the table rows show, which was too
+  // long to fit a narrow x-axis band without colliding with its neighbors,
+  // and not just the chunk's start date either, which made a short tail
+  // chunk (e.g. a range's last 2 days) look like it was missing data instead
+  // of just being unlabeled past its first day. `period` isn't one of
+  // formatPeriodLabel's recognized codes, so it prints as-is.
   const chartPeriods = !isWeekOrMore
     ? [{ period: wholeLabel, ...headcount }]
     : (subRows || []).map((row) => ({
-        period: isMultiMonthOrMore || isMonthOrMore ? `${formatDateDMY(row.start)}–${formatDateDMY(row.end)}` : formatDateDMY(row.start),
+        period: row.start === row.end ? shortDate(row.start) : `${shortDate(row.start)}–${shortDate(row.end)}`,
         ...row.data,
       }));
 

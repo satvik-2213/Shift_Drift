@@ -147,10 +147,16 @@ export default function AttritionTrendChart({ periods, exportFilename = "attriti
                 const barX = groupX + si * (barW + barGap);
                 const barY = yOfAxis(p[s.key], s.axis);
                 const barH = PAD_T + plotH - barY;
+                // Bars are narrow (4 per group) but the value text is wider
+                // than one bar, so neighboring labels collide if they all
+                // sit right above their own bar. Staggering into two
+                // alternating rows (even/odd series index) gives adjacent
+                // labels vertical separation instead of overlapping.
+                const dy = si % 2 === 0 ? -3 : -11;
                 return (
                   <g key={s.key}>
                     <rect x={barX} y={barY} width={barW} height={Math.max(0, barH)} fill={s.color} rx={1.5} />
-                    <text x={barX + barW / 2} y={barY - 3} textAnchor="middle" fontSize={6.5} fontWeight={600} fill={s.color}>
+                    <text x={barX + barW / 2} y={barY + dy} textAnchor="middle" fontSize={6} fontWeight={600} fill={s.color}>
                       {p[s.key]}
                     </text>
                   </g>
