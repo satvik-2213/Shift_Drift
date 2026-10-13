@@ -186,31 +186,6 @@ def _parse_pagination(params):
 
 
 class Handler(BaseHTTPRequestHandler):
-    # BaseHTTPRequestHandler defaults to HTTP/1.0, which closes the TCP
-    # connection after every single response - no keep-alive. Sitting behind
-    # an nginx reverse proxy that reuses upstream connections, that mismatch
-    # means nginx can try to reuse a connection this backend already closed,
-    # which fails mid-request and surfaces to the browser as a broken
-    # downstream HTTP/2 stream (ERR_HTTP2_PROTOCOL_ERROR) on whichever asset
-    # happened to land on the stale connection - intermittent, different
-    # asset each time. Safe to switch on: every response path below already
-    # sends an explicit Content-Length, which is what persistent connections
-    # need to know where one response ends and the next begins.
-    protocol_version = "HTTP/1.1"
-
-    # Without this, a kept-alive connection with no further requests blocks
-    # its handler thread on rfile.readline() forever - ThreadingHTTPServer
-    # spawns one thread per connection with no cap, so idle browser tabs
-    # (which keep several keep-alive connections open per origin long after
-    # the page finished loading) accumulate blocked threads all day instead
-    # of freeing them. Once enough pile up, the process is short on threads/
-    # file descriptors right when a new request needs one - intermittent,
-    # worse for larger responses (more socket buffer needed), and affects
-    # every client hitting this same process, not any one device or
-    # network. 15s just needs to be long enough that a real next request
-    # on the same connection isn't mistaken for an idle one.
-    timeout = 15
-
     def log_message(self, format, *args):
         # Raw IP, not BaseHTTPRequestHandler's default address_string() -
         # that does a reverse DNS lookup (socket.getfqdn()) on every single
