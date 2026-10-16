@@ -40,6 +40,17 @@ export async function logout() {
   await fetch(`${BASE}/logout`, { method: "POST" });
 }
 
+export async function changePassword(currentPassword, newPassword) {
+  const res = await fetch(`${BASE}/change-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(body.error || "Password change failed", res.status);
+  return body;
+}
+
 export const getOutliers = (params) => getJSON("/outliers", params);
 export const getCombos = (params) => getJSON("/combos", params);
 export const getStats = (params) => getJSON("/stats", params);

@@ -91,13 +91,22 @@ CREATE INDEX IF NOT EXISTS idx_employee_roster_name ON employee_roster(emp_name)
 -- several units gets several) via app.py's _effective_location. Passwords
 -- are never stored in the clear - password_hash is PBKDF2-HMAC-SHA256 over
 -- password_salt (see _hash_password/verify_app_user).
+-- must_change_password: forces a one-time password-change prompt (see
+-- app.py's /api/change-password) after a password is set via
+-- upsert_app_user - cleared (0) once the account holder picks their own.
+-- Lives in this table (server/output/attendance.db, gitignored) rather than
+-- anywhere code-adjacent so it survives a `git pull` + server restart: a
+-- fresh checkout never touches this file, so the flag only ever flips back
+-- to 1 when an actual password is (re)set, never as a side effect of
+-- deploying new code.
 CREATE TABLE IF NOT EXISTS app_users (
-  emp_id        TEXT NOT NULL PRIMARY KEY,
-  name          TEXT,
-  role          TEXT NOT NULL, -- "admin" or "restricted"
-  locations     TEXT,          -- JSON array of location_id, NULL for admin
-  password_salt TEXT NOT NULL,
-  password_hash TEXT NOT NULL
+  emp_id               TEXT NOT NULL PRIMARY KEY,
+  name                 TEXT,
+  role                 TEXT NOT NULL, -- "admin" or "restricted"
+  locations            TEXT,          -- JSON array of location_id, NULL for admin
+  password_salt        TEXT NOT NULL,
+  password_hash        TEXT NOT NULL,
+  must_change_password INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -159,6 +168,10 @@ def _migrate(conn):
     if "block" not in cols:
         conn.execute("ALTER TABLE employee_roster ADD COLUMN block TEXT")
 
+    user_cols = {row[1] for row in conn.execute("PRAGMA table_info(app_users)")}
+    if "must_change_password" not in user_cols:
+        conn.execute("ALTER TABLE app_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+
 
 _PBKDF2_ITERATIONS = 200_000
 
@@ -174,36 +187,78 @@ def _hash_password(password, salt_hex=None):
 
 
 def upsert_app_user(conn, emp_id, name, role, locations, password):
-    """Creates or resets one dashboard login account. `role` is "admin"
+    """Creates a dashboard login account, or syncs an existing one's
+    profile (name/role/locations) from seed_app_users.py. `role` is "admin"
     (unrestricted) or "restricted"; `locations` is a list of location_id
-    values for a restricted account (ignored/stored NULL for admin)."""
+    values for a restricted account (ignored/stored NULL for admin).
+
+    `password` is only ever applied on genuine creation (the INSERT path) -
+    an existing row's password_salt/password_hash/must_change_password are
+    deliberately left untouched on conflict. seed_app_users.py reapplies
+    its *entire* users_seed.json on every run (not just new entries), so if
+    this also reset the password on every run, anyone who'd used
+    /api/change-password to move off their DOB default would silently have
+    it wiped back the next time an admin re-ran the script to onboard one
+    new hire - see reset_app_user_password for the explicit, deliberate way
+    to force a specific account's password back to a new value."""
     salt_hex, digest = _hash_password(password)
     locations_json = json.dumps(list(locations)) if role != "admin" and locations else None
     with conn:
         conn.execute(
-            """INSERT INTO app_users (emp_id, name, role, locations, password_salt, password_hash)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO app_users (emp_id, name, role, locations, password_salt, password_hash, must_change_password)
+               VALUES (?, ?, ?, ?, ?, ?, 1)
                ON CONFLICT(emp_id) DO UPDATE SET
-                 name=excluded.name, role=excluded.role, locations=excluded.locations,
-                 password_salt=excluded.password_salt, password_hash=excluded.password_hash""",
+                 name=excluded.name, role=excluded.role, locations=excluded.locations""",
             (emp_id, name, role, locations_json, salt_hex, digest),
         )
 
 
+def _set_password(conn, emp_id, new_password, must_change_password):
+    salt_hex, digest = _hash_password(new_password)
+    with conn:
+        cur = conn.execute(
+            "UPDATE app_users SET password_salt = ?, password_hash = ?, must_change_password = ? WHERE emp_id = ?",
+            (salt_hex, digest, int(bool(must_change_password)), emp_id),
+        )
+    return cur.rowcount > 0
+
+
+def set_user_password(conn, emp_id, new_password):
+    """Self-service password change (see app.py's /api/change-password) -
+    clears must_change_password since the account holder has now picked
+    their own. Returns False if emp_id isn't a real app_users row (e.g. the
+    master admin account, which lives in server/.env and has no row here)."""
+    return _set_password(conn, emp_id, new_password, must_change_password=False)
+
+
+def reset_app_user_password(conn, emp_id, new_password):
+    """Explicit admin-triggered reset of an EXISTING account's password
+    (see seed_app_users.py --reset), as opposed to upsert_app_user which
+    never touches an existing row's password. Re-flags must_change_password
+    so the account holder is forced to pick a new one of their own on next
+    login, same as a brand-new account. Returns False if emp_id has no
+    app_users row at all - this resets, it doesn't create."""
+    return _set_password(conn, emp_id, new_password, must_change_password=True)
+
+
 def verify_app_user(conn, emp_id, password):
     """Checks emp_id/password against app_users. Returns
-    {"emp_id", "name", "role", "locations"} on a match (locations is a list,
-    or None for an admin account) - None if there's no such account or the
-    password doesn't match. Always hashes even on a missing account (dummy
-    salt) so a wrong-username and a wrong-password attempt take the same
-    time, not a tell for username enumeration."""
+    {"emp_id", "name", "role", "locations", "must_change_password"} on a
+    match (locations is a list, or None for an admin account) - None if
+    there's no such account or the password doesn't match. Always hashes
+    even on a missing account (dummy salt) so a wrong-username and a
+    wrong-password attempt take the same time, not a tell for username
+    enumeration."""
     row = conn.execute("SELECT * FROM app_users WHERE emp_id = ?", (emp_id,)).fetchone()
     salt_hex = row["password_salt"] if row else secrets.token_hex(16)
     _, digest = _hash_password(password, salt_hex)
     if row is None or not hmac.compare_digest(digest, row["password_hash"]):
         return None
     locations = json.loads(row["locations"]) if row["locations"] else None
-    return {"emp_id": row["emp_id"], "name": row["name"], "role": row["role"], "locations": locations}
+    return {
+        "emp_id": row["emp_id"], "name": row["name"], "role": row["role"], "locations": locations,
+        "must_change_password": bool(row["must_change_password"]),
+    }
 
 
 def upsert_day(conn, date_str, rows):

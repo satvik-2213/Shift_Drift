@@ -8,6 +8,7 @@ import OutliersAccordion from "./components/OutliersAccordion";
 import CombosTable from "./components/CombosTable";
 import LoadingOverlay from "./components/LoadingOverlay";
 import Login from "./components/Login";
+import ChangePassword from "./components/ChangePassword";
 import WorkforcePanel from "./components/WorkforcePanel";
 import {
   getMeta,
@@ -47,6 +48,11 @@ export default function App() {
   // of what the client sends (see app.py's _effective_location), so the UI
   // just needs to reflect that lock, not enforce it itself.
   const [session, setSession] = useState({ role: null, location: null });
+  // Set from /api/login or /api/session - true blocks the dashboard behind
+  // ChangePassword until /api/change-password clears it (see app.py's
+  // module docstring: the server itself 403s every other route meanwhile,
+  // this is just the UI reflecting that, not the enforcement).
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [tab, setTab] = useState("shift-drift");
 
   const [meta, setMeta] = useState(null);
@@ -135,25 +141,33 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const { authenticated, role, location } = await getSession();
+      const { authenticated, role, location, mustChangePassword: mcp } = await getSession();
       setAuthed(authenticated);
       if (authenticated) {
         setSession({ role, location });
-        await loadInitialData(role, location);
+        setMustChangePassword(Boolean(mcp));
+        if (!mcp) await loadInitialData(role, location);
       }
     })();
   }, []);
 
-  const handleLoggedIn = async ({ role, location }) => {
+  const handleLoggedIn = async ({ role, location, mustChangePassword: mcp }) => {
     setSession({ role, location });
+    setMustChangePassword(Boolean(mcp));
     setAuthed(true);
-    await loadInitialData(role, location);
+    if (!mcp) await loadInitialData(role, location);
+  };
+
+  const handlePasswordChanged = async () => {
+    setMustChangePassword(false);
+    await loadInitialData(session.role, session.location);
   };
 
   const handleLogout = async () => {
     await logout();
     setAuthed(false);
     setSession({ role: null, location: null });
+    setMustChangePassword(false);
     setFilters(null);
     setMeta(null);
   };
@@ -263,6 +277,10 @@ export default function App() {
 
   if (authed === false) {
     return <Login onLoggedIn={handleLoggedIn} />;
+  }
+
+  if (mustChangePassword) {
+    return <ChangePassword onChanged={handlePasswordChanged} />;
   }
 
   if (!filters) {

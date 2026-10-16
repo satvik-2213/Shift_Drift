@@ -30,6 +30,19 @@ Two kinds of login, same /api/login endpoint:
     client sends - a non-admin can't see another branch's data just by
     editing the request.
 
+A db.app_users row can carry must_change_password (set when the account is
+first created, or explicitly force-reset via `seed_app_users.py --reset` -
+see db.upsert_app_user/reset_app_user_password): every
+/api/* route except /api/session, /api/logout and /api/change-password
+403s for such a session until it POSTs a new password via
+/api/change-password, which clears the flag. This lives in the db
+(server/output/attendance.db), not in SESSIONS or in code, specifically so
+it survives a `git pull` + server restart - the prompt reappearing on every
+restart (deliberately NOT wanted) is a different failure mode from the flag
+living somewhere a restart or redeploy could reset it, and this avoids
+both. The master admin account has no app_users row, so this never applies
+to it.
+
 Usage:
     python3 app.py [port]   # default 8787
 """
@@ -63,10 +76,26 @@ DEFAULT_PAGE_SIZE = 200
 MAX_PAGE_SIZE = 1000
 
 SESSION_COOKIE = "sd_session"
-# token -> {"role": "admin" | "employee", "location": str | None} - in-memory,
-# cleared on restart. "location" is only ever set for role "employee" (the
-# location that session is pinned to); it's None for admin (unrestricted).
+# token -> {"role": "admin" | "employee", "location": str | None,
+# "emp_id": str | None, "must_change_password": bool} - in-memory, cleared
+# on restart (a fresh login re-derives all of this from the session cookie
+# the browser already holds plus a fresh db.verify_app_user lookup, so
+# losing SESSIONS on restart just means "log in again", not "forget whether
+# this account still owes a password change" - that half lives in
+# app_users.must_change_password, a durable db column, specifically so a
+# `git pull` + server restart can't make the prompt reappear for someone
+# who already changed their password, nor skip it for someone who hasn't.
+# "location" is only ever set for role "employee" (the location that
+# session is pinned to); it's None for admin (unrestricted). "emp_id" is
+# None for the master admin account (APP_USERNAME/APP_PASSWORD in
+# server/.env has no app_users row, so there's nothing to change-password
+# against - see _handle_change_password).
 SESSIONS = {}
+
+# GET/POST endpoints reachable even while a session's password change is
+# still pending - everything else 403s (see do_GET/do_POST) so a forced
+# change can't be bypassed by a client that just ignores the prompt.
+ALLOWED_DURING_FORCED_PASSWORD_CHANGE = {"/api/session", "/api/logout", "/api/change-password"}
 
 
 def _to_dmy(iso_date):
@@ -259,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
         password = body.get("password", "")
         # compare_digest avoids leaking match-length via response timing
         if hmac.compare_digest(user, APP_USERNAME) and hmac.compare_digest(password, APP_PASSWORD):
-            role, location = "admin", None
+            role, location, emp_id, must_change_password = "admin", None, None, False
         else:
             conn = db.get_connection()
             try:
@@ -271,10 +300,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             role = "admin" if matched["role"] == "admin" else "employee"
             location = None if role == "admin" else matched["locations"]
+            emp_id = matched["emp_id"]
+            must_change_password = matched["must_change_password"]
         token = secrets.token_urlsafe(32)
-        SESSIONS[token] = {"role": role, "location": location}
+        SESSIONS[token] = {
+            "role": role, "location": location, "emp_id": emp_id,
+            "must_change_password": must_change_password,
+        }
         self._send_json(
-            {"ok": True, "role": role, "location": location},
+            {"ok": True, "role": role, "location": location, "mustChangePassword": must_change_password},
             status=200,
             set_cookie=f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Secure",
         )
@@ -283,6 +317,32 @@ class Handler(BaseHTTPRequestHandler):
         token = self._session_token()
         SESSIONS.pop(token, None)
         self._send_json({"ok": True}, set_cookie=f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0")
+
+    def _handle_change_password(self):
+        info = self._session_info()
+        if info is None:
+            self._send_error_json("Authentication required", 401)
+            return
+        if info.get("emp_id") is None:
+            # Master admin (server/.env) - no app_users row to update.
+            self._send_error_json("This account's password can't be changed here", 400)
+            return
+        body = self._read_json_body()
+        current_password = body.get("currentPassword", "")
+        new_password = body.get("newPassword", "")
+        if len(new_password) < 8:
+            self._send_error_json("New password must be at least 8 characters", 400)
+            return
+        conn = db.get_connection()
+        try:
+            if db.verify_app_user(conn, info["emp_id"], current_password) is None:
+                self._send_error_json("Current password is incorrect", 401)
+                return
+            db.set_user_password(conn, info["emp_id"], new_password)
+        finally:
+            conn.close()
+        info["must_change_password"] = False
+        self._send_json({"ok": True})
 
     def _send_file(self, path, content_type=None, cache_control=None):
         if not os.path.isfile(path):
@@ -342,13 +402,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session":
             info = self._session_info()
             if info:
-                self._send_json({"authenticated": True, "role": info["role"], "location": info["location"]})
+                self._send_json({
+                    "authenticated": True, "role": info["role"], "location": info["location"],
+                    "mustChangePassword": info["must_change_password"],
+                })
             else:
                 self._send_json({"authenticated": False})
             return
 
-        if not self._is_authenticated():
+        info = self._session_info()
+        if info is None:
             self._send_error_json("Authentication required", 401)
+            return
+        if info["must_change_password"] and path not in ALLOWED_DURING_FORCED_PASSWORD_CHANGE:
+            self._send_error_json("Password change required", 403)
             return
 
         try:
@@ -396,6 +463,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_login()
             elif path == "/api/logout":
                 self._handle_logout()
+            elif path == "/api/change-password":
+                self._handle_change_password()
             else:
                 self._send_error_json("not found", 404)
         except Exception as e:  # keep the server alive on unexpected failures
