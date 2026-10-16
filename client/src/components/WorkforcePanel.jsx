@@ -53,26 +53,27 @@ function trendStartDate(end, granularity, periodCount) {
   return d.toISOString().slice(0, 10);
 }
 
-function HeadcountTile({ label, value, color, onClick, active }) {
+function HeadcountTile({ label, value, unit, gradient, onClick, active }) {
   const clickable = !!onClick;
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!clickable}
-      className="rounded-2xl border p-4 text-left shadow-[var(--shadow)] transition-colors"
+      className="rounded-2xl p-4 text-left transition-shadow"
       style={{
-        borderColor: active ? "var(--accent)" : "var(--border)",
-        background: "var(--bg-surface)",
+        background: gradient,
+        boxShadow: active ? "var(--shadow), inset 0 0 0 2px var(--accent)" : "var(--shadow)",
         cursor: clickable ? "pointer" : "default",
       }}
     >
-      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">
+      <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-[color:var(--text-secondary)]">
         {label}
         {clickable && <span className="text-[color:var(--accent)]">&#8964;</span>}
       </div>
-      <div className="mt-1 text-2xl font-semibold" style={{ color: color ?? "var(--text-primary)" }}>
-        {value}
+      <div className="mt-2 flex items-baseline gap-1">
+        <span className="text-[28px] font-extrabold leading-none text-[color:var(--text-primary)]">{value}</span>
+        {unit && <span className="text-xs font-semibold text-[color:var(--text-muted)]">{unit}</span>}
       </div>
     </button>
   );
@@ -164,9 +165,7 @@ function BlockHeadcountCard({ blockKey, data }) {
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wide text-[color:var(--text-muted)]">Attrition rate</div>
-          <div className="text-lg font-semibold" style={{ color: "var(--late)" }}>
-            {data ? `${data.attrition_rate}%` : "-"}
-          </div>
+          <div className="text-lg font-semibold text-[color:var(--text-primary)]">{data ? `${data.attrition_rate}%` : "-"}</div>
         </div>
       </div>
     </div>
@@ -246,23 +245,36 @@ export default function WorkforcePanel({ headcount, prevHeadcount, blockHeadcoun
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <HeadcountTile label="Opening headcount" value={headcount ? compactNumber(headcount.headcount_start) : "-"} />
+        <HeadcountTile
+          label="Opening headcount"
+          value={headcount ? compactNumber(headcount.headcount_start) : "-"}
+          gradient="var(--tile-purple)"
+        />
         <HeadcountTile
           label="Exits"
           value={headcount ? compactNumber(headcount.exits) : "-"}
-          color="var(--late)"
+          gradient="var(--tile-red)"
           onClick={() => toggleDrilldown("exits")}
           active={drilldown === "exits"}
         />
         <HeadcountTile
           label="Joins"
           value={headcount ? compactNumber(headcount.joins) : "-"}
-          color="var(--ontime)"
+          gradient="var(--tile-green)"
           onClick={() => toggleDrilldown("joins")}
           active={drilldown === "joins"}
         />
-        <HeadcountTile label="Closing headcount" value={headcount ? compactNumber(headcount.headcount_end) : "-"} />
-        <HeadcountTile label="Attrition rate" value={headcount ? `${headcount.attrition_rate}%` : "-"} color="var(--late)" />
+        <HeadcountTile
+          label="Closing headcount"
+          value={headcount ? compactNumber(headcount.headcount_end) : "-"}
+          gradient="var(--tile-purple)"
+        />
+        <HeadcountTile
+          label="Attrition rate"
+          value={headcount ? headcount.attrition_rate : "-"}
+          unit={headcount ? "%" : undefined}
+          gradient="var(--tile-teal)"
+        />
       </div>
 
       {/* DS15/DS1 (EMPMAST.GROUPCODE 860/861) disabled for now, per request -
@@ -271,7 +283,7 @@ export default function WorkforcePanel({ headcount, prevHeadcount, blockHeadcoun
           beside the tabs below were RND-only noise everywhere else). */}
       {false && (
         <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-bold text-[color:var(--text-primary)]">Headcount by block</h3>
+          <h3 className="text-sm font-bold text-[color:var(--heading)]">Headcount by block</h3>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <BlockHeadcountCard blockKey="DS15" data={blockHeadcounts?.DS15} />
             <BlockHeadcountCard blockKey="DS1" data={blockHeadcounts?.DS1} />
@@ -281,7 +293,7 @@ export default function WorkforcePanel({ headcount, prevHeadcount, blockHeadcoun
 
       <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-4 shadow-[var(--shadow)]">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-bold text-[color:var(--text-primary)]">Attrition rate snapshots</h3>
+          <h3 className="text-sm font-bold text-[color:var(--heading)]">Attrition rate snapshots</h3>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex gap-1 rounded-lg border border-[color:var(--border)] p-0.5">
               {TABS.map((g) => (
@@ -351,12 +363,14 @@ export default function WorkforcePanel({ headcount, prevHeadcount, blockHeadcoun
                         <tr key={p.period} className="border-b border-[color:var(--border)] last:border-0">
                           <td className="px-3 py-1.5 align-top tabular">{formatPeriodLabel(p.period)}</td>
                           <td className="px-3 py-1.5 align-top tabular">{compactNumber(p.headcount_start)}</td>
-                          <td className="px-3 py-1.5 align-top tabular">{compactNumber(p.exits)}</td>
-                          <td className="px-3 py-1.5 align-top tabular">{compactNumber(p.joins)}</td>
-                          <td className="px-3 py-1.5 align-top tabular">{compactNumber(p.headcount_end)}</td>
-                          <td className="px-3 py-1.5 align-top tabular font-medium" style={{ color: "var(--late)" }}>
-                            {p.attrition_rate}%
+                          <td className="px-3 py-1.5 align-top tabular" style={{ color: "var(--late)" }}>
+                            {compactNumber(p.exits)}
                           </td>
+                          <td className="px-3 py-1.5 align-top tabular" style={{ color: "var(--ontime)" }}>
+                            {compactNumber(p.joins)}
+                          </td>
+                          <td className="px-3 py-1.5 align-top tabular">{compactNumber(p.headcount_end)}</td>
+                          <td className="px-3 py-1.5 align-top tabular font-medium text-[color:var(--text-primary)]">{p.attrition_rate}%</td>
                         </tr>
                       ))}
                     </tbody>

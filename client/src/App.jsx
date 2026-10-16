@@ -312,7 +312,7 @@ export default function App() {
             {/* Extension Pattern (~65%) gets the lion's share of width;
                 the two charts share the remaining ~35%, stacked so each gets
                 real height to stretch into instead of being squeezed sideways. */}
-            <div className="grid min-h-0 flex-1 grid-cols-[1.9fr_1fr] gap-4 px-5 py-5">
+            <div className="grid min-h-0 flex-1 grid-cols-[1.9fr_1fr] gap-3 px-5 pt-4 pb-3">
               <div className="flex min-h-0 flex-col gap-3">
                 <StatTiles
                   stats={stats}
@@ -386,7 +386,7 @@ function Panel({ title, subtitle, children, className = "", scroll = false }) {
       className={`flex flex-col rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] shadow-[var(--shadow)] ${className}`}
     >
       <div className="flex flex-none items-baseline justify-between gap-2 px-5 pt-4 pb-3">
-        <h2 className="text-sm font-bold text-[color:var(--text-primary)]">{title}</h2>
+        <h2 className="text-sm font-bold text-[color:var(--heading)]">{title}</h2>
         {subtitle && <span className="text-xs text-[color:var(--text-muted)]">{subtitle}</span>}
       </div>
       <div className={`min-h-0 flex-1 px-5 pb-4 ${scroll ? "overflow-y-auto" : "flex flex-col"}`}>{children}</div>

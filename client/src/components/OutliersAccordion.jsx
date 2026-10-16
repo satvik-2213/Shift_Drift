@@ -107,16 +107,16 @@ export default function OutliersAccordion({ filters, page, onPageChange, searchT
   return (
     <div
       ref={containerRef}
-      className="mx-5 mb-5 flex-none overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] shadow-[var(--shadow)] scroll-mt-5"
+      className="mx-5 mb-3 flex-none overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] shadow-[var(--shadow)] scroll-mt-5"
     >
       <div
         role="button"
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setOpen((o) => !o)}
-        className="flex w-full cursor-pointer items-center justify-between gap-3 px-5 py-3 text-left"
+        className="flex w-full cursor-pointer items-center justify-between gap-3 px-5 py-2.5 text-left"
       >
-        <h2 className="text-sm font-bold text-[color:var(--text-primary)]">Outliers</h2>
+        <h2 className="text-sm font-bold text-[color:var(--heading)]">Outliers</h2>
         <div className="flex flex-none items-center gap-3">
           {open && data && (
             <>

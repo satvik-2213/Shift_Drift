@@ -65,7 +65,7 @@ export default function FiltersBar({
   const onEnter = (e) => e.key === "Enter" && apply();
 
   return (
-    <div className="mx-5 mt-4 flex flex-none flex-wrap items-end justify-between gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-4 shadow-[var(--shadow)]">
+    <div className="mx-5 mt-3 flex flex-none flex-wrap items-end justify-between gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-3 shadow-[var(--shadow)]">
       <div className="flex items-end gap-2">
         <Field label="Start date">
           <DatePickerField value={draft.start} onChange={(v) => setDraft((d) => ({ ...d, start: v }))} />
@@ -76,7 +76,7 @@ export default function FiltersBar({
       </div>
       <Field label="Location">
         <select
-          className={`${inputClass} w-40 ${locked ? "cursor-not-allowed opacity-60" : ""}`}
+          className={`${inputClass} w-36 ${locked ? "cursor-not-allowed opacity-60" : ""}`}
           value={locked || draft.location}
           onChange={set("location")}
           disabled={!!locked}
@@ -106,7 +106,7 @@ export default function FiltersBar({
         </select>
       </Field>
       <Field label="Department">
-        <select className={`${inputClass} w-40`} value={draft.department} onChange={set("department")}>
+        <select className={`${inputClass} w-36`} value={draft.department} onChange={set("department")}>
           <option value="">All departments</option>
           {localOptions.departments.map((d) => (
             <option key={d.code} value={d.code}>
@@ -162,7 +162,7 @@ export default function FiltersBar({
             <input
               type="search"
               placeholder="Name or employee ID"
-              className={`${inputClass} w-44`}
+              className={`${inputClass} w-36`}
               value={draft.search}
               onChange={set("search")}
               onKeyDown={onEnter}

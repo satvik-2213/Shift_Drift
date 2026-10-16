@@ -22,17 +22,6 @@ const WEEK_THRESHOLD_DAYS = 7;
 const MONTH_THRESHOLD_DAYS = 28;
 const MULTI_MONTH_THRESHOLD_DAYS = 60;
 
-// "DD/MM", no year - for the chart's x-axis only. A chunk's full range (not
-// just the day it starts on) still needs to show on multi-day chunks - the
-// last week/month chunk of a range is often a short tail (e.g. just the
-// 29th-30th), and labeling it with only its start date made that tail look
-// like missing data. This stays short enough to avoid the same label-
-// collision problem the full "DD-MM-YYYY–DD-MM-YYYY" format caused.
-function shortDate(iso) {
-  const [, m, d] = iso.split("-");
-  return `${d}/${m}`;
-}
-
 function daysInclusive(start, end) {
   return Math.round((new Date(end) - new Date(start)) / 86400000) + 1;
 }
@@ -122,9 +111,7 @@ function Row({ label, data, indent = 0, expandable = false, expanded = false, on
         {data ? compactNumber(data.joins) : "-"}
       </td>
       <td className="px-3 py-1.5 align-top tabular">{data ? compactNumber(data.headcount_end) : "-"}</td>
-      <td className="px-3 py-1.5 align-top tabular font-medium" style={{ color: "var(--late)" }}>
-        {data ? `${data.attrition_rate}%` : "-"}
-      </td>
+      <td className="px-3 py-1.5 align-top tabular font-medium text-[color:var(--text-primary)]">{data ? `${data.attrition_rate}%` : "-"}</td>
     </tr>
   );
 }
@@ -233,10 +220,9 @@ function MonthRow({ chunk, scope }) {
 
 export default function DateRangeDrilldown({ scope, headcount }) {
   const { start, end } = scope || {};
-  // Table row expand/collapse (click-driven) is separate from fetching the
-  // top-tier breakdown: the chart below needs that breakdown up front to
-  // have more than one bar group to show, not gated behind a click the way
-  // the table's own drill-down still is.
+  // Top-tier breakdown (day/week/month rows) is fetched up front so the
+  // table's first click-to-expand has no extra loading delay; it has no
+  // effect on the chart above, which only ever shows the whole range.
   const [tableExpanded, setTableExpanded] = useState(false);
   const [subRows, setSubRows] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -287,22 +273,12 @@ export default function DateRangeDrilldown({ scope, headcount }) {
 
   const wholeLabel = `${formatDateDMY(start)} – ${formatDateDMY(end)}`;
 
-  // Chart data: the whole range as one bar group below a week (nothing to
-  // break down into), otherwise one group per top-tier chunk (day/week/
-  // month, same breakdown the table itself expands into). Labeled with a
-  // short "DD/MM" (or "DD/MM–DD/MM" when the chunk spans more than one day) -
-  // not the full "DD-MM-YYYY–DD-MM-YYYY" the table rows show, which was too
-  // long to fit a narrow x-axis band without colliding with its neighbors,
-  // and not just the chunk's start date either, which made a short tail
-  // chunk (e.g. a range's last 2 days) look like it was missing data instead
-  // of just being unlabeled past its first day. `period` isn't one of
-  // formatPeriodLabel's recognized codes, so it prints as-is.
-  const chartPeriods = !isWeekOrMore
-    ? [{ period: wholeLabel, ...headcount }]
-    : (subRows || []).map((row) => ({
-        period: row.start === row.end ? shortDate(row.start) : `${shortDate(row.start)}–${shortDate(row.end)}`,
-        ...row.data,
-      }));
+  // Chart data: always the whole selected range as a single bar group
+  // (Opening/Exits/Joins/Closing) - never broken into the day/week/month
+  // sub-chunks the table below drills into. Those sub-chunks answer a
+  // different question ("how did it move within the range") than this
+  // chart, which is just "what are the range's totals."
+  const chartPeriods = [{ period: wholeLabel, ...headcount }];
 
   const toggleTable = () => {
     if (isWeekOrMore) setTableExpanded((e) => !e);
@@ -310,13 +286,7 @@ export default function DateRangeDrilldown({ scope, headcount }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
-      {loading && chartPeriods.length === 0 ? (
-        <p className="text-sm text-[color:var(--text-muted)]">Loading&hellip;</p>
-      ) : error && chartPeriods.length === 0 ? (
-        <p className="text-xs font-medium text-[color:var(--late)]">{error}</p>
-      ) : (
-        <AttritionTrendChart periods={chartPeriods} />
-      )}
+      <AttritionTrendChart periods={chartPeriods} />
       <div className="overflow-x-auto rounded-xl border border-[color:var(--border)]">
         <table className="w-full min-w-[460px] border-collapse text-left text-[12px]">
           <thead>

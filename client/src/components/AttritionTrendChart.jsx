@@ -95,10 +95,25 @@ export default function AttritionTrendChart({ periods, exportFilename = "attriti
     rightLabel: Math.round(rightMax * f),
   }));
 
-  const groupW = bandW * 0.78;
-  const groupPad = (bandW - groupW) / 2;
+  // Label only each series' single worst/largest period, same selective
+  // labeling WeekdayChart uses - a full year is 4 series x 12 bars, and
+  // numbering every single one gets cramped and hard to read at a glance.
+  // Hovering (or the table alongside this chart) still gives the exact
+  // value for every bar.
+  const peakOf = (key) => periods.reduce((best, p) => (p[key] > best[key] ? p : best), periods[0]);
+  const peaks = Object.fromEntries(SERIES.map((s) => [s.key, peakOf(s.key)]));
+
+  // Bar width is capped so a band with few periods (in the extreme, the Date
+  // Range tab's single whole-range group, which gets the *entire* plot width
+  // as its one "band") doesn't stretch each bar to an enormous width - past
+  // MAX_BAR_W the group just centers in its band with extra padding instead
+  // of growing wider.
+  const MAX_BAR_W = 26;
   const barGap = 2;
-  const barW = (groupW - barGap * (SERIES.length - 1)) / SERIES.length;
+  const idealGroupW = bandW * 0.78;
+  const barW = Math.min(MAX_BAR_W, (idealGroupW - barGap * (SERIES.length - 1)) / SERIES.length);
+  const groupW = barW * SERIES.length + barGap * (SERIES.length - 1);
+  const groupPad = (bandW - groupW) / 2;
 
   return (
     <div className="relative flex h-72 flex-col">
@@ -153,12 +168,15 @@ export default function AttritionTrendChart({ periods, exportFilename = "attriti
                 // alternating rows (even/odd series index) gives adjacent
                 // labels vertical separation instead of overlapping.
                 const dy = si % 2 === 0 ? -3 : -11;
+                const isPeak = p.period === peaks[s.key].period && p[s.key] > 0;
                 return (
                   <g key={s.key}>
                     <rect x={barX} y={barY} width={barW} height={Math.max(0, barH)} fill={s.color} rx={1.5} />
-                    <text x={barX + barW / 2} y={barY + dy} textAnchor="middle" fontSize={6} fontWeight={600} fill={s.color}>
-                      {p[s.key]}
-                    </text>
+                    {isPeak && (
+                      <text x={barX + barW / 2} y={barY + dy} textAnchor="middle" fontSize={6} fontWeight={600} fill={s.color}>
+                        {p[s.key]}
+                      </text>
+                    )}
                   </g>
                 );
               })}

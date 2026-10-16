@@ -31,26 +31,28 @@ function buildTiles(stats, combos) {
       key: "employees",
       label: "Employees",
       value: stats ? compactNumber(stats.employees) : "-",
+      gradient: "var(--tile-purple)",
     },
     {
       key: "employee_days",
       label: "Employee-days",
       value: stats ? compactNumber(stats.employee_days) : "-",
       sub: stats ? `Early ${formatRate(earlyRate)} · On-time ${formatRate(ontimeRate)} · Late ${formatRate(lateRate)}` : null,
+      gradient: "var(--tile-purple)",
     },
     {
       key: "employees_affected",
       label: "Extension pattern",
       value: stats ? compactNumber(stats.combo_employees) : "-",
-      color: "var(--accent)",
       sub: stats ? `${formatRate(rateNum(stats.combo_employees, stats.employees))} of employees · ${dayPair}` : null,
+      gradient: "var(--tile-teal)",
     },
     {
       key: "repeat_offenders",
       label: `Repeat offenders (${REPEAT_THRESHOLD}+ times)`,
       value: combos ? compactNumber(repeatEmployees.size) : "-",
-      color: "var(--late)",
       sub: worstCount > 0 ? `Worst case: ${worstCount} times this range` : "None this range",
+      gradient: "var(--tile-red)",
       clickable: true,
     },
   ];
@@ -67,19 +69,18 @@ export default function StatTiles({ stats, combos, onRepeatOffendersClick }) {
             key={t.key}
             type={t.clickable ? "button" : undefined}
             onClick={t.clickable ? onRepeatOffendersClick : undefined}
-            className={`rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-surface)] p-4 text-left shadow-[var(--shadow)] ${
-              t.clickable ? "cursor-pointer transition-colors hover:border-[color:var(--accent)]" : ""
-            }`}
+            className={`rounded-2xl p-4 text-left shadow-[var(--shadow)] ${t.clickable ? "kpi-tile-clickable cursor-pointer" : ""}`}
+            style={{ background: t.gradient }}
             title={t.clickable ? `Filter the table below to ${REPEAT_THRESHOLD}+ occurrences` : undefined}
           >
-            <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-muted)]">
+            <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-[color:var(--text-secondary)]">
               {t.label}
               {t.clickable && <span className="text-[color:var(--accent)]">&#8964;</span>}
             </div>
-            <div className="mt-1 text-2xl font-semibold" style={{ color: t.color ?? "var(--text-primary)" }}>
+            <div className="mt-2 text-[28px] font-extrabold leading-none text-[color:var(--text-primary)]">
               {t.value}
             </div>
-            {t.sub && <div className="mt-0.5 truncate text-[11px] text-[color:var(--text-muted)]">{t.sub}</div>}
+            {t.sub && <div className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]">{t.sub}</div>}
           </Tag>
         );
       })}

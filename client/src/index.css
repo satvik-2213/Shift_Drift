@@ -14,8 +14,9 @@
   --brand-2: #00b2a9; /* teal - ring icon */
   --brand-3: #69be28; /* green - ring icon */
 
-  --bg-page: #faf8fb;
-  --bg-surface: #ffffff;
+  --bg-page: #f9f2ff; /* sampled from image001.png's own backdrop behind the gradient KPI tiles */
+  --bg-surface: #fdfaff; /* a hair off pure white, same lavender cast as --bg-page, so cards/tables still read
+    lighter/elevated without the stark white-on-lavender contrast pure #fff gave once the page stopped being near-white */
   --bg-surface-2: #f3eef7;
   --bg-surface-3: #e7f7f5;
 
@@ -31,6 +32,19 @@
   --accent: #42145f;
   --accent-ink: #ffffff;
   --accent-2: #00b2a9;
+  --heading: var(--accent); /* section titles use brand purple, not --text-primary - matches
+    intranet.lauruslabs.net's own heading treatment (e.g. "Celebrating Excellence") */
+
+  /* Header chrome - sampled from intranet.lauruslabs.net's top bar/sidebar
+     (deep purple fading to a lighter mauve), the one piece of that site's
+     look our app didn't already share. Kept separate from --accent/--brand-1
+     (used for data accents, borders, focus rings) so retuning the header
+     never risks those. */
+  --header-grad-1: #341b51;
+  --header-grad-2: #4a2f6e;
+  --header-ink: #ffffff;
+  --header-ink-muted: rgba(255, 255, 255, 0.68);
+  --header-divider: rgba(255, 255, 255, 0.22);
 
   /* Clock-in outcome colors (validated: node scripts/validate_palette.js) */
   --early: #2a78d6;
@@ -39,6 +53,16 @@
   --unclassified: #4a3aa7;
 
   --shadow: 0 1px 2px rgba(66, 20, 95, 0.05), 0 8px 24px -10px rgba(66, 20, 95, 0.16);
+
+  /* KPI tile gradients - color-coded by meaning (not just alternating), so
+     a tile's hue tells you what kind of number it is at a glance: purple
+     for neutral headcount, red for exits, green for joins, teal for rates.
+     Pastel opacity over --bg-surface keeps them readable against both the
+     card's own dark text and the page's light background. */
+  --tile-purple: linear-gradient(135deg, rgba(66, 20, 95, 0.16), rgba(66, 20, 95, 0.05));
+  --tile-red: linear-gradient(135deg, rgba(227, 73, 72, 0.18), rgba(227, 73, 72, 0.05));
+  --tile-green: linear-gradient(135deg, rgba(105, 190, 40, 0.22), rgba(105, 190, 40, 0.06));
+  --tile-teal: linear-gradient(135deg, rgba(0, 178, 169, 0.22), rgba(0, 178, 169, 0.06));
 }
 
 * {
@@ -80,4 +104,15 @@ html {
 
 .animate-accordion-in {
   animation: accordion-in 0.25s ease-out;
+}
+
+/* Hover affordance for clickable KPI tiles - replaces the old
+   hover:border-[accent] now that tiles are a filled gradient with no
+   visible border to recolor. */
+.kpi-tile-clickable {
+  transition: box-shadow 0.15s ease;
+}
+
+.kpi-tile-clickable:hover {
+  box-shadow: var(--shadow), inset 0 0 0 2px var(--accent);
 }
