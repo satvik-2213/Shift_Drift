@@ -161,6 +161,18 @@ BLOCK_BY_GROUPCODE = {
     "861": "DS1",
 }
 
+# EMP_CODEs confirmed (2026-10-16) to be LH01's biometric/admin placeholder
+# accounts, not real employees - both seeded with date_joined 2007-05-03 (a
+# system go-live date shared with other known non-employee codes like
+# hr_admin/HR_VSP10/HR_HYD9 elsewhere in EMPMAST), zero attendance punches
+# ever, and HR_LH01's "name" is a facility name (LSPL HYD R&D), not a
+# person. They were inflating LH01's attrition-tab headcount by 2 (12
+# instead of HR's expected 10 for Oct 1-15). Scoped to just these two,
+# confirmed codes for now - EMPMAST has similar-looking placeholder codes
+# at other locations that haven't been confirmed yet; don't extend this
+# list by pattern-matching without the same per-code confirmation.
+NON_EMPLOYEE_EMP_CODES = {"HR_LH01", "1184_LS"}
+
 
 def resolve_block(group_code):
     if group_code is None:
@@ -226,7 +238,11 @@ def main():
 
     rows = []
     overridden = 0
+    excluded = 0
     for r in roster_rows:
+        if r["EmpID"] in NON_EMPLOYEE_EMP_CODES:
+            excluded += 1
+            continue
         doj = r["DateOfJoining"]
         raw_exit = resolve_exit_date(r["DateExited"])
         exit_date = resolve_exit_date_with_attendance(r["DateExited"], r["LastPunch"])
@@ -251,7 +267,8 @@ def main():
 
     with_exit = sum(1 for r in rows if r[6])
     print(f"Synced {len(rows)} employees ({with_exit} with a known exit date from EMPMAST.DTRETIR, "
-          f"{overridden} overridden back to active - DTRETIR said exited but they're still punching in).")
+          f"{overridden} overridden back to active - DTRETIR said exited but they're still punching in, "
+          f"{excluded} excluded as known non-employee placeholder codes).")
 
 
 if __name__ == "__main__":
